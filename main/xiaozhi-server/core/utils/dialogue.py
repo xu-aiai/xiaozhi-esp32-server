@@ -118,14 +118,7 @@ class Dialogue:
             # 第一段：静态 system prompt（前缀缓存可命中）
             dialogue.append({"role": "system", "content": static_part})
 
-        # 第二段：few-shot 示例（会话内不变，也是缓存前缀的一部分）
-        non_system_messages = [m for m in self.dialogue if m.role != "system"]
-        fewshot_messages = [m for m in non_system_messages if m.is_temporary]
-        complete_fewshot = self._ensure_tool_calls_complete(fewshot_messages)
-        for m in complete_fewshot:
-            self.getMessages(m, dialogue)
-
-        # 第三段：动态上下文 system prompt（时间、记忆、说话人等）
+        # 第二段：动态上下文 system prompt（时间、记忆、说话人等）
         # 保持 system 角色以确保模型权威性，不降级为 user
         if system_message and dynamic_part:
             # 替换时间占位符
@@ -163,6 +156,13 @@ class Dialogue:
                 pass
 
             dialogue.append({"role": "system", "content": dynamic_part})
+
+        # 第三段：few-shot 示例（会话内不变，也是缓存前缀的一部分）
+        non_system_messages = [m for m in self.dialogue if m.role != "system"]
+        fewshot_messages = [m for m in non_system_messages if m.is_temporary]
+        complete_fewshot = self._ensure_tool_calls_complete(fewshot_messages)
+        for m in complete_fewshot:
+            self.getMessages(m, dialogue)
 
         # 第四段：实际对话历史（不含 few-shot）
         actual_messages = [m for m in non_system_messages if not m.is_temporary]
