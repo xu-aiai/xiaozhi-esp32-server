@@ -4,12 +4,11 @@ set -Eeuo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
-COMPOSE_FILE="${COMPOSE_FILE:-${REPO_ROOT}/main/xiaozhi-server/docker-compose.yml}"
+COMPOSE_FILE="${COMPOSE_FILE:-${REPO_ROOT}/../docker-compose_all.yml}"
 SERVICE_NAME="${SERVICE_NAME:-xiaozhi-esp32-server}"
 CONTAINER_NAME="${CONTAINER_NAME:-xiaozhi-esp32-server}"
 DOCKERFILE="${DOCKERFILE:-${REPO_ROOT}/Dockerfile-server}"
 BUILD_CONTEXT="${BUILD_CONTEXT:-${REPO_ROOT}}"
-PLATFORM="${PLATFORM:-linux/amd64}"
 IMAGE_NAME="${IMAGE_NAME:-xiaozhi-esp32-server:llm-debug-20260507}"
 
 log() {
@@ -35,23 +34,17 @@ if [ ! -f "${DOCKERFILE}" ]; then
   exit 1
 fi
 
+log "停止服务：${SERVICE_NAME}"
+docker compose -f "${COMPOSE_FILE}" stop "${SERVICE_NAME}"
+
+log "删除容器：${CONTAINER_NAME}"
+docker rm "${CONTAINER_NAME}"
+
+log "删除镜像：${IMAGE_NAME}"
+docker rmi "${IMAGE_NAME}"
+
 log "构建镜像：${IMAGE_NAME}"
-docker buildx build \
-  --platform "${PLATFORM}" \
-  --load \
-  -f "${DOCKERFILE}" \
-  -t "${IMAGE_NAME}" \
-  "${BUILD_CONTEXT}"
-
-log "停止并删除旧容器：${SERVICE_NAME}"
-docker compose -f "${COMPOSE_FILE}" rm -sf "${SERVICE_NAME}" >/dev/null 2>&1 || true
-
-if docker ps -a --format '{{.Names}}' | grep -Fxq "${CONTAINER_NAME}"; then
-  docker rm -f "${CONTAINER_NAME}" >/dev/null
-  log "已删除容器：${CONTAINER_NAME}"
-else
-  log "未找到容器：${CONTAINER_NAME}"
-fi
+docker build -f "${DOCKERFILE}" -t "${IMAGE_NAME}" "${BUILD_CONTEXT}"
 
 log "重新启动容器：${SERVICE_NAME}"
 docker compose -f "${COMPOSE_FILE}" up -d "${SERVICE_NAME}"
