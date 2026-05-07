@@ -18,6 +18,11 @@ THINKING_DISABLED_DOMAINS = {
     "volces.com": {"thinking": {"type": "disabled"}},
 }
 
+MERGE_SYSTEM_MESSAGE_MODELS = {
+    "Qwen3.6-35B-A3.5B",
+    "Qwen3.6-35B-A3B",
+}
+
 
 def _to_loggable(value):
     """Convert OpenAI SDK objects to JSON-serializable data for debug logs."""
@@ -98,6 +103,26 @@ class LLMProvider(LLMProviderBase):
                 msg["content"] = ""
         return dialogue
 
+    def _merge_system_messages_if_needed(self, dialogue):
+        """部分 OpenAI 兼容模型只接受单条 system，将 system 内容合并到第一条。"""
+        if self.model_name not in MERGE_SYSTEM_MESSAGE_MODELS:
+            return dialogue
+
+        system_messages = [msg for msg in dialogue if msg.get("role") == "system"]
+        if len(system_messages) <= 1:
+            return dialogue
+
+        non_system_messages = [msg for msg in dialogue if msg.get("role") != "system"]
+        merged_system_message = dict(system_messages[0])
+        merged_system_message["content"] = "\n\n".join(
+            str(msg.get("content", "")) for msg in system_messages
+        )
+
+        logger.bind(tag=TAG).debug(
+            f"模型 {self.model_name} 已合并 {len(system_messages)} 条 system 消息"
+        )
+        return [merged_system_message] + non_system_messages
+
     def _apply_thinking_disabled(self, request_params: dict):
         """根据域名自动禁用思考模式"""
         parsed_url = urlparse(self.base_url)
@@ -110,6 +135,7 @@ class LLMProvider(LLMProviderBase):
 
     def response(self, session_id, dialogue, **kwargs):
         dialogue = self.normalize_dialogue(dialogue)
+        dialogue = self._merge_system_messages_if_needed(dialogue)
 
         request_params = {
             "model": self.model_name,
@@ -158,6 +184,7 @@ class LLMProvider(LLMProviderBase):
 
     def response_with_functions(self, session_id, dialogue, functions=None, **kwargs):
         dialogue = self.normalize_dialogue(dialogue)
+        dialogue = self._merge_system_messages_if_needed(dialogue)
 
         request_params = {
             "model": self.model_name,
