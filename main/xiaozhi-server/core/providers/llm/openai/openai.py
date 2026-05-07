@@ -1,3 +1,4 @@
+import json
 import httpx
 import openai
 from openai.types import CompletionUsage
@@ -16,6 +17,25 @@ THINKING_DISABLED_DOMAINS = {
     "moonshot.cn": {"thinking": {"type": "disabled"}},
     "volces.com": {"thinking": {"type": "disabled"}},
 }
+
+
+def _to_loggable(value):
+    """Convert OpenAI SDK objects to JSON-serializable data for debug logs."""
+    if hasattr(value, "model_dump"):
+        return value.model_dump(mode="json")
+    if isinstance(value, dict):
+        return {k: _to_loggable(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_to_loggable(v) for v in value]
+    if isinstance(value, tuple):
+        return [_to_loggable(v) for v in value]
+    return value
+
+
+def _log_json(label, payload):
+    logger.bind(tag=TAG).debug(
+        f"{label}: {json.dumps(_to_loggable(payload), ensure_ascii=False, default=str)}"
+    )
 
 
 class LLMProvider(LLMProviderBase):
@@ -111,12 +131,14 @@ class LLMProvider(LLMProviderBase):
 
         # 禁用思考模式
         self._apply_thinking_disabled(request_params)
+        _log_json("OpenAI LLM完整输入参数", request_params)
 
         responses = self.client.chat.completions.create(**request_params)
 
         is_active = True
         try:            
             for chunk in responses:
+                _log_json("OpenAI LLM完整原始输出chunk", chunk)
                 try:
                     delta = chunk.choices[0].delta if getattr(chunk, "choices", None) else None
                     content = getattr(delta, "content", "") if delta else ""
@@ -157,11 +179,13 @@ class LLMProvider(LLMProviderBase):
 
         # 禁用思考模式
         self._apply_thinking_disabled(request_params)
+        _log_json("OpenAI LLM完整输入参数", request_params)
 
         stream = self.client.chat.completions.create(**request_params)
 
         try:
             for chunk in stream:
+                _log_json("OpenAI LLM完整原始输出chunk", chunk)
                 if getattr(chunk, "choices", None):
                     delta = chunk.choices[0].delta
                     content = getattr(delta, "content", "")

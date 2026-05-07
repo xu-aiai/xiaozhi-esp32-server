@@ -961,21 +961,29 @@ class ConnectionHandler:
                 )
                 memory_str = future.result()
 
+            llm_dialogue = self.dialogue.get_llm_dialogue_with_memory(
+                memory_str, self.config.get("voiceprint", {})
+            )
+            self.logger.bind(tag=TAG).debug(
+                "LLM完整输入dialogue: "
+                + json.dumps(llm_dialogue, ensure_ascii=False, default=str)
+            )
+
             if self.intent_type == "function_call" and functions is not None:
+                self.logger.bind(tag=TAG).debug(
+                    "LLM完整输入tools: "
+                    + json.dumps(functions, ensure_ascii=False, default=str)
+                )
                 # 使用支持functions的streaming接口
                 llm_responses = self.llm.response_with_functions(
                     self.session_id,
-                    self.dialogue.get_llm_dialogue_with_memory(
-                        memory_str, self.config.get("voiceprint", {})
-                    ),
+                    llm_dialogue,
                     functions=functions,
                 )
             else:
                 llm_responses = self.llm.response(
                     self.session_id,
-                    self.dialogue.get_llm_dialogue_with_memory(
-                        memory_str, self.config.get("voiceprint", {})
-                    ),
+                    llm_dialogue,
                 )
         except Exception as e:
             self.logger.bind(tag=TAG).error(f"LLM 处理出错 {query}: {e}")
@@ -991,6 +999,10 @@ class ConnectionHandler:
             for response in llm_responses:
                 if self.client_abort:
                     break
+                self.logger.bind(tag=TAG).debug(
+                    "LLM完整输出chunk: "
+                    + json.dumps(response, ensure_ascii=False, default=str)
+                )
                 if self.intent_type == "function_call" and functions is not None:
                     content, tools_call = response
                     if "content" in response:
