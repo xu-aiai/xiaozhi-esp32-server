@@ -23,6 +23,73 @@ MERGE_SYSTEM_MESSAGE_MODELS = {
     "Qwen3.6-35B-A3B",
 }
 
+MINIMAX_REASONING_SPLIT_MODEL_PREFIXES = (
+    "minimax-m2",
+)
+
+
+class ThinkContentFilter:
+    """流式过滤 <think>...</think>，可处理标签被拆到多个 chunk 的情况。"""
+
+    START_TAG = "<think>"
+    END_TAG = "</think>"
+    MAX_TAG_LEN = max(len(START_TAG), len(END_TAG))
+
+    def __init__(self):
+        self.in_think = False
+        self.pending = ""
+
+    def feed(self, content):
+        if not content:
+            return content
+
+        text = self.pending + content
+        self.pending = ""
+        output = []
+
+        while text:
+            if self.in_think:
+                end_index = text.find(self.END_TAG)
+                if end_index == -1:
+                    self.pending = self._extract_possible_tag_tail(text)
+                    return ""
+                text = text[end_index + len(self.END_TAG):]
+                self.in_think = False
+                continue
+
+            start_index = text.find(self.START_TAG)
+            if start_index == -1:
+                tail = self._extract_possible_tag_tail(text)
+                if tail:
+                    output.append(text[:-len(tail)])
+                    self.pending = tail
+                else:
+                    output.append(text)
+                return "".join(output)
+
+            output.append(text[:start_index])
+            text = text[start_index + len(self.START_TAG):]
+            self.in_think = True
+
+        return "".join(output)
+
+    def flush(self):
+        if self.in_think:
+            self.pending = ""
+            self.in_think = False
+            return ""
+        content = self.pending
+        self.pending = ""
+        return content
+
+    def _extract_possible_tag_tail(self, text):
+        max_tail_len = min(len(text), self.MAX_TAG_LEN - 1)
+        for tail_len in range(max_tail_len, 0, -1):
+            tail = text[-tail_len:]
+            if self.START_TAG.startswith(tail) or self.END_TAG.startswith(tail):
+                return tail
+        return ""
+
 
 def _to_loggable(value):
     """Convert OpenAI SDK objects to JSON-serializable data for debug logs."""
@@ -133,6 +200,17 @@ class LLMProvider(LLMProviderBase):
                 logger.bind(tag=TAG).info(f"为域名 {domain} 禁用思考模式，参数: {params}")
                 break
 
+    def _apply_minimax_reasoning_split(self, request_params: dict):
+        """MiniMax M2 系列支持将思考内容拆到 reasoning_details，避免混入 content。"""
+        model_name = (self.model_name or "").lower()
+        if not model_name.startswith(MINIMAX_REASONING_SPLIT_MODEL_PREFIXES):
+            return
+
+        request_params.setdefault("extra_body", {})["reasoning_split"] = True
+        logger.bind(tag=TAG).info(
+            f"为模型 {self.model_name} 启用 reasoning_split，避免思考内容进入 content"
+        )
+
     def response(self, session_id, dialogue, **kwargs):
         dialogue = self.normalize_dialogue(dialogue)
         dialogue = self._merge_system_messages_if_needed(dialogue)
@@ -157,11 +235,12 @@ class LLMProvider(LLMProviderBase):
 
         # 禁用思考模式
         self._apply_thinking_disabled(request_params)
+        self._apply_minimax_reasoning_split(request_params)
         _log_json("OpenAI LLM完整输入参数", request_params)
 
         responses = self.client.chat.completions.create(**request_params)
 
-        is_active = True
+        think_filter = ThinkContentFilter()
         try:            
             for chunk in responses:
                 _log_json("OpenAI LLM完整原始输出chunk", chunk)
@@ -171,14 +250,12 @@ class LLMProvider(LLMProviderBase):
                 except IndexError:
                     content = ""
                 if content:
-                    if "<think>" in content:
-                        is_active = False
-                        content = content.split("<think>")[0]
-                    if "</think>" in content:
-                        is_active = True
-                        content = content.split("</think>")[-1]
-                    if is_active:
-                        yield content
+                    filtered_content = think_filter.feed(content)
+                    if filtered_content:
+                        yield filtered_content
+            filtered_content = think_filter.flush()
+            if filtered_content:
+                yield filtered_content
         finally:
             responses.close()
 
@@ -206,10 +283,12 @@ class LLMProvider(LLMProviderBase):
 
         # 禁用思考模式
         self._apply_thinking_disabled(request_params)
+        self._apply_minimax_reasoning_split(request_params)
         _log_json("OpenAI LLM完整输入参数", request_params)
 
         stream = self.client.chat.completions.create(**request_params)
 
+        think_filter = ThinkContentFilter()
         try:
             for chunk in stream:
                 _log_json("OpenAI LLM完整原始输出chunk", chunk)
@@ -217,7 +296,8 @@ class LLMProvider(LLMProviderBase):
                     delta = chunk.choices[0].delta
                     content = getattr(delta, "content", "")
                     tool_calls = getattr(delta, "tool_calls", None)
-                    yield content, tool_calls
+                    filtered_content = think_filter.feed(content)
+                    yield filtered_content, tool_calls
                 elif isinstance(getattr(chunk, "usage", None), CompletionUsage):
                     usage_info = getattr(chunk, "usage", None)
                     logger.bind(tag=TAG).info(
@@ -225,5 +305,8 @@ class LLMProvider(LLMProviderBase):
                         f"输出 {getattr(usage_info, 'completion_tokens', '未知')}，"
                         f"共计 {getattr(usage_info, 'total_tokens', '未知')}"
                     )
+            filtered_content = think_filter.flush()
+            if filtered_content:
+                yield filtered_content, None
         finally:
             stream.close()
