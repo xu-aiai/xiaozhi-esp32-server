@@ -251,10 +251,10 @@ class LLMProvider(LLMProviderBase):
                     content = ""
                 if content:
                     filtered_content = think_filter.feed(content)
-                    if filtered_content:
+                    if filtered_content and filtered_content.strip():
                         yield filtered_content
             filtered_content = think_filter.flush()
-            if filtered_content:
+            if filtered_content and filtered_content.strip():
                 yield filtered_content
         finally:
             responses.close()
@@ -297,7 +297,10 @@ class LLMProvider(LLMProviderBase):
                     content = getattr(delta, "content", "")
                     tool_calls = getattr(delta, "tool_calls", None)
                     filtered_content = think_filter.feed(content)
-                    yield filtered_content, tool_calls
+                    if filtered_content and not filtered_content.strip():
+                        filtered_content = None
+                    if filtered_content or tool_calls:
+                        yield filtered_content, tool_calls
                 elif isinstance(getattr(chunk, "usage", None), CompletionUsage):
                     usage_info = getattr(chunk, "usage", None)
                     logger.bind(tag=TAG).info(
@@ -306,7 +309,7 @@ class LLMProvider(LLMProviderBase):
                         f"共计 {getattr(usage_info, 'total_tokens', '未知')}"
                     )
             filtered_content = think_filter.flush()
-            if filtered_content:
+            if filtered_content and filtered_content.strip():
                 yield filtered_content, None
         finally:
             stream.close()
