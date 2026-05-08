@@ -46,15 +46,27 @@ class MCPEndpointExecutor(ToolExecutor):
                 except Exception as e:
                     pass
 
-            # 视觉大模型不经过二次LLM处理
+            # 本地 Action 只处理内部约定的枚举值。
+            # MCP 业务动作（如 select_device / ask_missing_info）统一交给 LLM 续写，
+            # 以便把 message/state 组织成自然语言回复，并保留会话上下文。
             if (
                 resultJson is not None
                 and isinstance(resultJson, dict)
                 and "action" in resultJson
             ):
+                action_name = str(resultJson.get("action", "")).upper()
+                if action_name in Action.__members__:
+                    return ActionResponse(
+                        action=Action[action_name],
+                        response=(
+                            resultJson.get("response")
+                            or resultJson.get("message", "")
+                        ),
+                    )
+
                 return ActionResponse(
-                    action=Action[resultJson["action"]],
-                    response=resultJson.get("response", ""),
+                    action=Action.REQLLM,
+                    result=result,
                 )
 
             return ActionResponse(action=Action.REQLLM, result=str(result))

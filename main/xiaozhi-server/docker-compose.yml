@@ -18,5 +18,7 @@ services:
     volumes:
       # 配置文件目录
       - ./data:/opt/xiaozhi-esp32-server/data
+      # 日志文件目录，容器内 tmp/server.log 会固定写入宿主机 ./tmp/server.log
+      - ./tmp:/opt/xiaozhi-esp32-server/tmp
       # 模型文件挂接，很重要
       - ./models/SenseVoiceSmall/model.pt:/opt/xiaozhi-esp32-server/models/SenseVoiceSmall/model.pt
