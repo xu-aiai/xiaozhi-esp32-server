@@ -12,6 +12,10 @@ from plugins_func.register import Action, ActionResponse
 from core.handle.sendAudioHandle import send_stt_message
 from core.handle.reportHandle import enqueue_tool_report
 from core.utils.util import remove_punctuation_and_length
+from core.utils.tool_response import (
+    sanitize_tool_response_for_speech,
+    wrap_tool_result_for_llm,
+)
 from core.providers.tts.dto.dto import TTSMessageDTO, SentenceType
 
 TAG = __name__
@@ -182,11 +186,11 @@ async def process_intent_result(
                         if text is not None:
                             speak_txt(conn, text)
                     elif result.action == Action.REQLLM:  # 调用函数后再请求llm生成回复
-                        text = result.result
+                        text = wrap_tool_result_for_llm(function_name, result.result)
                         conn.dialogue.put(Message(role="tool", content=text))
                         llm_result = conn.intent.replyResult(text, original_text)
                         if llm_result is None:
-                            llm_result = text
+                            llm_result = result.result
                         speak_txt(conn, llm_result)
                     elif (
                         result.action == Action.NOTFOUND
@@ -214,6 +218,9 @@ async def process_intent_result(
 
 
 def speak_txt(conn: "ConnectionHandler", text):
+    text = sanitize_tool_response_for_speech(conn, text)
+    if not text:
+        return
     # 记录文本到 sentence_id 映射
     conn.tts.store_tts_text(conn.sentence_id, text)
 

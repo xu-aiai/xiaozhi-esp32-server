@@ -168,9 +168,9 @@ class UnifiedToolHandler:
 
             self.logger.debug(f"调用函数: {function_name}, 参数: {arguments}")
 
-            # 发送工具调用显示消息到设备
+            # 发送通用状态到设备，不暴露内部工具/知识库名称
             try:
-                await send_display_message(self.conn, f"% {function_name}")
+                await send_display_message(self.conn, "正在处理")
             except Exception as e:
                 self.logger.warning(f"发送工具调用显示消息失败: {e}")
 

@@ -41,6 +41,10 @@ from config.manage_api_client import DeviceNotFoundException, DeviceBindExceptio
 from core.utils.prompt_manager import PromptManager
 from core.utils.voiceprint_provider import VoiceprintProvider
 from core.utils.util import get_system_error_response
+from core.utils.tool_response import (
+    sanitize_tool_response_for_speech,
+    wrap_tool_result_for_llm,
+)
 from core.utils import textUtils
 
 
@@ -1032,14 +1036,18 @@ class ConnectionHandler:
                 if content is not None and len(content) > 0:
                     if not tool_call_flag:
                         response_message.append(content)
-                        self.tts.tts_text_queue.put(
-                            TTSMessageDTO(
-                                sentence_id=current_sentence_id,
-                                sentence_type=SentenceType.MIDDLE,
-                                content_type=ContentType.TEXT,
-                                content_detail=content,
+                        if not (
+                            self.intent_type == "function_call"
+                            and functions is not None
+                        ):
+                            self.tts.tts_text_queue.put(
+                                TTSMessageDTO(
+                                    sentence_id=current_sentence_id,
+                                    sentence_type=SentenceType.MIDDLE,
+                                    content_type=ContentType.TEXT,
+                                    content_detail=content,
+                                )
                             )
-                        )
         except Exception as e:
             self.logger.bind(tag=TAG).error(f"LLM stream processing error: {e}")
             self.tts.tts_text_queue.put(
@@ -1094,12 +1102,13 @@ class ConnectionHandler:
                     f"检测到 {len(tool_calls_list)} 个工具调用"
                 )
 
-                # LLM 流式阶段已播报过的文本
+                # 丢弃工具调用前模型输出的过程性文本，避免播报工具/知识库名称。
                 streamed_text = ""
                 if len(response_message) > 0:
-                    streamed_text = "".join(response_message)
-                    self.tts.store_tts_text(current_sentence_id, streamed_text)
-                    self.dialogue.put(Message(role="assistant", content=streamed_text))
+                    self.logger.bind(tag=TAG).debug(
+                        "Suppressing pre-tool-call assistant text: "
+                        + "".join(response_message)
+                    )
                 response_message.clear()
 
                 # 收集所有工具调用的 Future
@@ -1152,6 +1161,15 @@ class ConnectionHandler:
         # 存储对话内容
         if len(response_message) > 0:
             text_buff = "".join(response_message)
+            if self.intent_type == "function_call" and functions is not None:
+                self.tts.tts_text_queue.put(
+                    TTSMessageDTO(
+                        sentence_id=current_sentence_id,
+                        sentence_type=SentenceType.MIDDLE,
+                        content_type=ContentType.TEXT,
+                        content_detail=text_buff,
+                    )
+                )
             self.tts.store_tts_text(current_sentence_id, text_buff)
             self.dialogue.put(Message(role="assistant", content=text_buff))
 
@@ -1188,9 +1206,18 @@ class ConnectionHandler:
                         f"Skipping duplicate TTS for tool {tool_call_data['name']}, already streamed"
                     )
                 else:
-                    self.tts.tts_one_sentence(self, ContentType.TEXT, content_detail=text)
-                    self.tts.store_tts_text(self.sentence_id, text)
-                self.dialogue.put(Message(role="assistant", content=text))
+                    speech_text = sanitize_tool_response_for_speech(self, text)
+                    if speech_text:
+                        self.tts.tts_one_sentence(
+                            self, ContentType.TEXT, content_detail=speech_text
+                        )
+                        self.tts.store_tts_text(self.sentence_id, speech_text)
+                self.dialogue.put(
+                    Message(
+                        role="assistant",
+                        content=sanitize_tool_response_for_speech(self, text),
+                    )
+                )
             elif result.action == Action.REQLLM:
                 need_llm_tools.append((result, tool_call_data))
             elif result.action == Action.RECORD:
@@ -1264,7 +1291,9 @@ class ConnectionHandler:
             self.dialogue.put(Message(role="assistant", tool_calls=all_tool_calls))
 
             for result, tool_call_data in need_llm_tools:
-                text = result.result
+                text = wrap_tool_result_for_llm(
+                    tool_call_data["name"], result.result
+                )
                 if text is not None and len(text) > 0:
                     self.dialogue.put(
                         Message(
