@@ -219,14 +219,14 @@ end_prompt:
 selected_module:
   # 语音活动检测模块，默认使用SileroVAD模型
   VAD: SileroVAD
-  # 语音识别模块，默认使用FunASR本地模型
-  ASR: FunASR
+  # 语音识别模块，默认使用上游语音识别服务
+  ASR: UpstreamASR
   # 将根据配置名称对应的type调用实际的LLM适配器
   LLM: ChatGLMLLM
   # 视觉语言大模型
   VLLM: ChatGLMVLLM
   # TTS将根据配置名称对应的type调用实际的TTS适配器
-  TTS: EdgeTTS
+  TTS: UpstreamTTS
   # 记忆模块，默认不开启记忆；如果想使用超长记忆，推荐使用mem0ai；如果注重隐私，请使用本地的mem_local_short
   Memory: nomem
   # 意图识别模块开启后，可以播放音乐、控制音量、识别退出指令。
@@ -341,6 +341,20 @@ Memory:
     llm: ChatGLMLLM
 
 ASR:
+  UpstreamASR:
+    type: upstream_asr
+    base_url: http://10.90.252.47:8020/v1/audio/transcriptions
+    api_key: ""
+    model_name: ""
+    response_format: json
+    prompt: |
+      请严格保留型号/编号的原始写法。
+      1) 字母与数字必须原样输出：数字用阿拉伯数字，不要转成中文数字。
+      2) 例如：AP50G3 必须输出为 AP50G3，不要输出为 AP五零G三。
+      3) 仅输出转写文本本身。
+    language: ""
+    timeout: 300
+    output_dir: tmp/
   FunASR:
     type: fun_local
     model_dir: models/SenseVoiceSmall
@@ -750,6 +764,19 @@ VLLM:
     model_name: lite
     api_key: 你的api_password
 TTS:
+  UpstreamTTS:
+    type: upstream_tts
+    api_url: http://10.90.252.47:8091/v1/audio/speech
+    api_key: ""
+    model: ""
+    voice: vivian
+    language: Chinese
+    task_type: CustomVoice
+    instructions: "Speak with a warm and friendly tone"
+    speed: 1
+    format: wav
+    timeout: 300
+    output_dir: tmp/
   # 当前支持的type为edge、doubao，可自行适配
   EdgeTTS:
     # 定义TTS API类型

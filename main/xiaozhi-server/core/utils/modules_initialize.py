@@ -100,14 +100,18 @@ def initialize_modules(
 
 def initialize_tts(config):
     select_tts_module = config["selected_module"]["TTS"]
+    tts_config = config["TTS"][select_tts_module]
     tts_type = (
         select_tts_module
-        if "type" not in config["TTS"][select_tts_module]
-        else config["TTS"][select_tts_module]["type"]
+        if "type" not in tts_config
+        else tts_config["type"]
+    )
+    logger.bind(tag=TAG).info(
+        f"准备初始化TTS: module={select_tts_module}, type={tts_type}"
     )
     new_tts = tts.create_instance(
         tts_type,
-        config["TTS"][select_tts_module],
+        tts_config,
         str(config.get("delete_audio", True)).lower() in ("true", "1", "yes"),
     )
     return new_tts
@@ -115,14 +119,18 @@ def initialize_tts(config):
 
 def initialize_asr(config):
     select_asr_module = config["selected_module"]["ASR"]
+    asr_config = config["ASR"][select_asr_module]
     asr_type = (
         select_asr_module
-        if "type" not in config["ASR"][select_asr_module]
-        else config["ASR"][select_asr_module]["type"]
+        if "type" not in asr_config
+        else asr_config["type"]
+    )
+    logger.bind(tag=TAG).info(
+        f"准备初始化ASR: module={select_asr_module}, type={asr_type}"
     )
     new_asr = asr.create_instance(
         asr_type,
-        config["ASR"][select_asr_module],
+        asr_config,
         str(config.get("delete_audio", True)).lower() in ("true", "1", "yes"),
     )
     logger.bind(tag=TAG).info("ASR模块初始化完成")
@@ -148,4 +156,3 @@ def initialize_voiceprint(asr_instance, config):
     except Exception as e:
         logger.bind(tag=TAG).error(f"动态初始化声纹识别功能失败: {str(e)}")
         return False
-
