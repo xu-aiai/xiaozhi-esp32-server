@@ -45,7 +45,6 @@ from core.utils.tool_response import (
     sanitize_tool_response_for_speech,
     wrap_tool_result_for_llm,
 )
-from core.utils.language import SUPPORTED_TTS_LANGUAGES, resolve_interaction_language
 from core.utils import textUtils
 
 
@@ -140,12 +139,6 @@ class ConnectionHandler:
         self.asr_audio = []
         self.asr_audio_queue = queue.Queue()
         self.current_speaker = None  # 存储当前说话人
-        self.current_language = resolve_interaction_language(
-            self.config.get("TTS", {})
-            .get(self.config.get("selected_module", {}).get("TTS", ""), {})
-            .get("language"),
-            default="Chinese",
-        )
 
         # llm相关变量
         self.dialogue = Dialogue()
@@ -975,26 +968,6 @@ class ConnectionHandler:
             llm_dialogue = self.dialogue.get_llm_dialogue_with_memory(
                 memory_str, self.config.get("voiceprint", {})
             )
-            current_language = resolve_interaction_language(
-                getattr(self, "current_language", None), default="Chinese"
-            )
-            self.current_language = current_language
-            language_instruction = {
-                "role": "system",
-                "content": (
-                    f"本轮交互语言已识别为: {current_language}。"
-                    "语言识别结果必须且只能是以下枚举之一: "
-                    f"{', '.join(sorted(SUPPORTED_TTS_LANGUAGES))}。"
-                    "最终面向用户的回答请使用该语言。"
-                ),
-            }
-            insert_pos = 0
-            while (
-                insert_pos < len(llm_dialogue)
-                and llm_dialogue[insert_pos].get("role") == "system"
-            ):
-                insert_pos += 1
-            llm_dialogue.insert(insert_pos, language_instruction)
             self.logger.bind(tag=TAG).debug(
                 "LLM完整输入dialogue: "
                 + json.dumps(llm_dialogue, ensure_ascii=False, default=str)
@@ -1319,7 +1292,7 @@ class ConnectionHandler:
 
             for result, tool_call_data in need_llm_tools:
                 text = wrap_tool_result_for_llm(
-                    tool_call_data["name"], result.result, self.current_language
+                    tool_call_data["name"], result.result
                 )
                 if text is not None and len(text) > 0:
                     self.dialogue.put(
