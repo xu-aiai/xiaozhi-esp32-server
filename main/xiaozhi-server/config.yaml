@@ -772,8 +772,8 @@ TTS:
     voice: vivian
     language: Chinese
     task_type: CustomVoice
-    instructions: "Speak with a warm and friendly tone"
-    speed: 1
+    instructions: "请用平静、自然、稳定、偏平缓的语气朗读。语调不要夸张，不要明显抑扬顿挫，不要情绪化表达。"
+    speed: 0.9
     format: wav
     timeout: 300
     output_dir: tmp/
