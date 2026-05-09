@@ -9,6 +9,7 @@ from typing import Dict, Any, TYPE_CHECKING
 if TYPE_CHECKING:
     from core.connection import ConnectionHandler
 from config.logger import setup_logging
+from core.utils.language import normalize_prompt_language
 from jinja2 import Template
 
 TAG = __name__
@@ -252,12 +253,13 @@ class PromptManager:
                     )
 
             # 获取TTS选择的语言，默认值为中文
-            language = (
+            raw_language = (
                 self.config.get("TTS", {})
                 .get(self.config.get("selected_module", {}).get("TTS", ""), {})
                 .get("language")
                 or "中文"
             )
+            language = normalize_prompt_language(raw_language)
             self.logger.bind(tag=TAG).debug(f"获取到选择的语言: {language}")
 
             # 替换模板变量

@@ -330,6 +330,64 @@
 - 智能体依然可以手工切换回其他模型
 - 默认值变更不影响已有模型的可用性
 
+### 7.6 TTS 人声配置机制
+
+TTS 人声沿用项目原有的音色配置机制，不为 `UpstreamTTS` 单独设计新的配置通道。
+
+相关数据表：
+
+- `ai_tts_voice`
+- `ai_agent`
+- `ai_agent_template`
+- `ai_model_config`
+
+其中 `ai_tts_voice` 是 TTS 模型的人声候选表，关键字段如下：
+
+- `id`：音色记录主键，例如 `TTS_UpstreamTTS_0001`
+- `tts_model_id`：所属 TTS 模型，例如 `TTS_UpstreamTTS`
+- `name`：智控台展示名称
+- `tts_voice`：实际传给 TTS provider 的人声编码，例如 `vivian`
+- `languages`：语言标签，用于智控台筛选
+- `voice_demo`：试听音频地址
+- `reference_audio` / `reference_text`：部分克隆类 TTS 使用的参考音频与文本
+
+`UpstreamTTS` 新增的人声数据由 `202605091200.sql` 写入，当前默认包含：
+
+- `vivian`
+- `serena`
+- `uncle_fu`
+- `dylan`
+- `eric`
+- `ryan`
+- `aiden`
+- `ono_anna`
+- `sohee`
+
+智控台保存智能体配置时，不直接保存 `tts_voice` 编码，而是保存 `ai_tts_voice.id`：
+
+- `ai_agent.tts_voice_id`
+- `ai_agent_template.tts_voice_id`
+
+这样设计的原因是：
+
+- 页面可以稳定使用音色记录主键做选择项
+- 音色展示名、语言、试听地址可以独立维护
+- 后端生成运行时配置时，再把 `tts_voice_id` 解析成真正的 `tts_voice` 编码
+
+最终传给 Python 服务端的智能体私有 TTS 配置会包含 `private_voice`。运行时 TTS provider 使用如下优先级：
+
+1. 如果存在 `private_voice`，使用智能体选择的人声
+2. 否则使用模型配置 JSON 中的默认 `voice`
+3. 如果模型配置也没有 `voice`，使用 provider 内置默认值
+
+`UpstreamTTS` 的实现与现有其他 TTS provider 保持一致：
+
+```python
+self.voice = config.get("private_voice") or config.get("voice", "vivian")
+```
+
+因此，只要智控台的音色表中维护了对应 `tts_voice`，并且智能体选择了该音色，`UpstreamTTS` 就会把该值作为请求体中的 `voice` 发送给上游服务。
+
 ## 8. 本地配置设计
 
 ### 8.1 `config.yaml`
@@ -383,6 +441,43 @@
 4. 获取完整音频字节
 5. 本地将音频转为 Opus 包
 6. 通过 WebSocket 把音频发送回设备
+
+### 9.3 TTS 人声选择流程
+
+TTS 人声选择链路跨越智控台、管理端和 Python 服务端。
+
+整体流程如下：
+
+1. 智控台根据当前选择的 `ttsModelId` 请求音色列表
+2. 管理端从 `ai_tts_voice` 查询该 TTS 模型下的人声候选项
+3. 页面把 `ai_tts_voice.name` 展示给用户，把 `ai_tts_voice.id` 作为选择值
+4. 用户保存智能体配置后，管理端把选择结果写入 `ai_agent.tts_voice_id`
+5. 设备连接 Python 服务端时，服务端调用 `manager-api` 的 `/config/agent-models`
+6. 管理端根据智能体配置生成私有模型配置
+7. 管理端把 `ai_agent.tts_voice_id` 对应的 `ai_tts_voice.tts_voice` 写入 TTS 配置的 `private_voice`
+8. Python 服务端把私有配置合并到当前连接配置
+9. 初始化 TTS provider 时，`private_voice` 覆盖模型默认 `voice`
+10. `UpstreamTTS.text_to_speak()` 请求上游时，把最终人声编码放入 JSON 请求体的 `voice` 字段
+
+这条链路的关键点是：
+
+- 智能体保存的是音色记录 ID，不是直接保存 provider 人声编码
+- provider 收到的是已经解析后的 `private_voice`
+- `private_voice` 只影响当前智能体或当前设备对应的私有配置，不会修改全局模型默认配置
+- 如果没有选择智能体私有音色，则继续使用 `ai_model_config.config_json.voice`
+
+示例：
+
+```text
+ai_tts_voice.id        = TTS_UpstreamTTS_0001
+ai_tts_voice.name      = vivian
+ai_tts_voice.tts_voice = vivian
+ai_agent.tts_voice_id  = TTS_UpstreamTTS_0001
+private_voice          = vivian
+TTS request voice      = vivian
+```
+
+如果后续需要新增人声，不需要修改 Python provider。只需要在智控台音色管理中为 `TTS_UpstreamTTS` 新增记录，或通过数据库迁移插入新的 `ai_tts_voice` 数据，并保证 `tts_voice` 是上游 TTS 服务支持的合法人声编码。
 
 ## 10. 日志与排障设计
 
@@ -498,6 +593,9 @@ Java / SQL：
 
 - `main/manager-api/src/main/resources/db/changelog/202605091200.sql`
 - `main/manager-api/src/main/resources/db/changelog/db.changelog-master.yaml`
+- `main/manager-api/src/main/resources/mapper/agent/AgentDao.xml`
+- `main/manager-web/src/views/roleConfig.vue`
+- `main/manager-web/src/components/TtsModel.vue`
 
 ## 13. 结论
 

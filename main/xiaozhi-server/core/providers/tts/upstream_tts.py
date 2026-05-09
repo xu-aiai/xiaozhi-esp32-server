@@ -2,6 +2,7 @@ import requests
 
 from config.logger import setup_logging
 from core.providers.tts.base import TTSProviderBase
+from core.utils.language import normalize_tts_language
 from core.utils.util import check_model_key
 
 TAG = __name__
@@ -21,7 +22,7 @@ class TTSProvider(TTSProviderBase):
         )
         self.model = (config.get("model") or "").strip()
         self.voice = config.get("private_voice") or config.get("voice", "vivian")
-        self.language = config.get("language", "Chinese")
+        self.language = normalize_tts_language(config.get("language"), "Chinese")
         self.task_type = config.get("task_type", "CustomVoice")
         self.instructions = config.get("instructions", "")
         self.audio_file_type = config.get("format", "wav")
