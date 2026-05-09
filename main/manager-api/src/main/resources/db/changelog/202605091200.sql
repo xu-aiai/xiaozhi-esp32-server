@@ -9,7 +9,7 @@ insert into `ai_model_config` values
 ('TTS_UpstreamTTS', 'TTS', 'UpstreamTTS', '上游语音合成', 1, 1, '{"type": "upstream_tts", "api_url": "http://10.90.252.47:8091/v1/audio/speech", "model": "", "api_key": "", "voice": "vivian", "language": "Chinese", "task_type": "CustomVoice", "instructions": "Speak with a warm and friendly tone", "speed": 1, "format": "wav", "timeout": 300, "output_dir": "tmp/"}', NULL, '默认上游TTS，按 JSON 方式调用 /v1/audio/speech', 1, NULL, NULL, NULL, NULL);
 
 delete from `ai_tts_voice` where tts_model_id = 'TTS_UpstreamTTS';
-insert into `ai_tts_voice` values
+insert into `ai_tts_voice` (`id`, `tts_model_id`, `name`, `tts_voice`, `languages`, `voice_demo`, `remark`, `sort`, `creator`, `create_date`, `updater`, `update_date`) values
 ('TTS_UpstreamTTS_0001', 'TTS_UpstreamTTS', 'vivian', 'vivian', '多语言', NULL, NULL, 1, NULL, NULL, NULL, NULL),
 ('TTS_UpstreamTTS_0002', 'TTS_UpstreamTTS', 'serena', 'serena', '多语言', NULL, NULL, 2, NULL, NULL, NULL, NULL),
 ('TTS_UpstreamTTS_0003', 'TTS_UpstreamTTS', 'uncle_fu', 'uncle_fu', '多语言', NULL, NULL, 3, NULL, NULL, NULL, NULL),
