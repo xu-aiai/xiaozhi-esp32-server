@@ -8,6 +8,11 @@ from core.utils.util import check_model_key
 TAG = __name__
 logger = setup_logging()
 
+FLAT_TONE_INSTRUCTIONS = (
+    "请用平静、自然、稳定、偏平缓的语气朗读。"
+    "不要抑扬顿挫，不要带有情绪，不要夸张，不要戏剧化。"
+)
+
 
 class TTSProvider(TTSProviderBase):
     TTS_PARAM_CONFIG = [
@@ -64,6 +69,13 @@ class TTSProvider(TTSProviderBase):
             data["model"] = self.model
         if isinstance(self.extra, dict):
             data.update(self.extra)
+        current_instructions = str(data.get("instructions") or "").strip()
+        if FLAT_TONE_INSTRUCTIONS not in current_instructions:
+            data["instructions"] = (
+                f"{current_instructions}\n{FLAT_TONE_INSTRUCTIONS}"
+                if current_instructions
+                else FLAT_TONE_INSTRUCTIONS
+            )
 
         logger.bind(tag=TAG).info(
             "发起上游TTS请求: "
