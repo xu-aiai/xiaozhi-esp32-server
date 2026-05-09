@@ -16,6 +16,7 @@ from core.utils.tool_response import (
     sanitize_tool_response_for_speech,
     wrap_tool_result_for_llm,
 )
+from core.utils.language import resolve_interaction_language
 from core.providers.tts.dto.dto import TTSMessageDTO, SentenceType
 
 TAG = __name__
@@ -91,6 +92,12 @@ async def process_intent_result(
     try:
         # 尝试将结果解析为JSON
         intent_data = json.loads(intent_result)
+        conn.current_language = resolve_interaction_language(
+            intent_data.get("language"),
+            original_text,
+            default=getattr(conn, "current_language", "Chinese"),
+        )
+        conn.logger.bind(tag=TAG).info(f"意图识别语言: {conn.current_language}")
 
         # 检查是否有function_call
         if "function_call" in intent_data:
@@ -116,7 +123,9 @@ async def process_intent_result(
                     )
 
                     # 构建带上下文的基础提示
-                    context_prompt = f"""当前时间：{current_time}
+                    context_prompt = f"""本轮交互语言已识别为：{conn.current_language}
+                                        最终面向用户的回答必须使用该语言。
+                                        当前时间：{current_time}
                                         今天日期：{today_date} ({today_weekday})
                                         今天农历：{lunar_date}
 
@@ -186,7 +195,9 @@ async def process_intent_result(
                         if text is not None:
                             speak_txt(conn, text)
                     elif result.action == Action.REQLLM:  # 调用函数后再请求llm生成回复
-                        text = wrap_tool_result_for_llm(function_name, result.result)
+                        text = wrap_tool_result_for_llm(
+                            function_name, result.result, conn.current_language
+                        )
                         conn.dialogue.put(Message(role="tool", content=text))
                         llm_result = conn.intent.replyResult(text, original_text)
                         if llm_result is None:

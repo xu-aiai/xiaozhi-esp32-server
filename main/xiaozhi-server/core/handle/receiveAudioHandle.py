@@ -9,7 +9,8 @@ from core.utils.util import audio_to_data
 from core.handle.abortHandle import handleAbortMessage
 from core.handle.intentHandler import handle_user_intent
 from core.utils.output_counter import check_device_output_limit
-from core.handle.sendAudioHandle import send_stt_message, SentenceType
+from core.utils.language import resolve_interaction_language
+from core.handle.sendAudioHandle import send_stt_message, SentenceType, send_display_message
 
 TAG = __name__
 
@@ -41,22 +42,32 @@ async def startToChat(conn: "ConnectionHandler", text):
     speaker_name = None
     language_tag = None
     actual_text = text
+    language_text = text
 
     try:
         # 尝试解析JSON格式的输入
         if text.strip().startswith("{") and text.strip().endswith("}"):
             data = json.loads(text)
-            if "speaker" in data and "content" in data:
-                speaker_name = data["speaker"]
-                language_tag = data["language"]
-                actual_text = data["content"]
+            if isinstance(data, dict) and "content" in data:
+                speaker_name = data.get("speaker")
+                language_tag = data.get("language")
+                language_text = data["content"]
                 conn.logger.bind(tag=TAG).info(f"解析到说话人信息: {speaker_name}")
 
-                # 直接使用JSON格式的文本，不解析
+                # 保留JSON格式的文本，让后续链路继续携带说话人等元信息
                 actual_text = text
     except (json.JSONDecodeError, KeyError):
         # 如果解析失败，继续使用原始文本
         pass
+
+    current_language = resolve_interaction_language(
+        language_tag,
+        language_text,
+        default=getattr(conn, "current_language", "Chinese"),
+    )
+    conn.current_language = current_language
+    conn.logger.bind(tag=TAG).info(f"当前交互语言: {current_language}")
+    await send_display_message(conn, f"当前语言: {current_language}")
 
     # 保存说话人信息到连接对象
     if speaker_name:

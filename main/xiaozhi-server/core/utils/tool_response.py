@@ -66,14 +66,18 @@ def sanitize_tool_response_for_speech(conn: "ConnectionHandler", text):
     return sanitized.strip()
 
 
-def wrap_tool_result_for_llm(tool_name: str, result_text):
+def wrap_tool_result_for_llm(tool_name: str, result_text, language: str = None):
     """Add a non-spoken instruction around tool output before asking the LLM."""
     if result_text is None or not isinstance(result_text, str):
         return result_text
+    language_instruction = (
+        f"最终面向用户的回答必须使用 {language}。" if language else ""
+    )
     return (
         "以下是内部工具返回的信息，仅用于组织最终回答。"
         "最终回答必须直接回答用户，不要说出或展示工具名、函数名、知识库名，"
-        "也不要说“调用工具”“查询知识库”“根据知识库”等过程说明。\n\n"
+        "也不要说“调用工具”“查询知识库”“根据知识库”等过程说明。"
+        f"{language_instruction}\n\n"
         f"<internal_tool_name>{tool_name}</internal_tool_name>\n"
         f"<tool_result>\n{result_text}\n</tool_result>"
     )

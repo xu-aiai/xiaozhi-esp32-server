@@ -6,6 +6,7 @@ from ..base import IntentProviderBase
 from plugins_func.functions.play_music import initialize_music_handler
 from config.logger import setup_logging
 from core.utils.util import get_system_error_response
+from core.utils.language import SUPPORTED_TTS_LANGUAGES, resolve_interaction_language
 import re
 import json
 import hashlib
@@ -28,6 +29,20 @@ class IntentProvider(IntentProviderBase):
         self.cache_manager = cache_manager
         self.CacheType = CacheType
         self.history_count = 4  # 默认使用最近4条对话记录
+
+    def _normalize_intent_language(self, intent_text: str, user_text: str) -> str:
+        try:
+            intent_data = json.loads(intent_text)
+        except json.JSONDecodeError:
+            intent_data = {"function_call": {"name": "continue_chat"}}
+
+        language = resolve_interaction_language(
+            intent_data.get("language"),
+            user_text,
+            default="Chinese",
+        )
+        intent_data["language"] = language
+        return json.dumps(intent_data, ensure_ascii=False)
 
     def get_intent_system_prompt(self, functions_list: str) -> str:
         """
@@ -61,6 +76,10 @@ class IntentProvider(IntentProviderBase):
         prompt = (
             "【严格格式要求】你必须只能返回JSON格式，绝对不能返回任何自然语言！\n\n"
             "你是一个意图识别助手。请分析用户的最后一句话，判断用户意图并调用相应的函数。\n\n"
+            "【语言识别要求】每次都必须识别用户当前使用的语言，并返回 language 字段。\n"
+            "language 必须且只能是以下枚举之一："
+            f"{', '.join(sorted(SUPPORTED_TTS_LANGUAGES))}。\n"
+            "如果不确定，也必须从上述枚举中选择最可能的一项，不能返回 auto、unknown、zh、en 等非枚举值。\n\n"
             "【重要规则】以下类型的查询请直接返回result_for_context，无需调用函数：\n"
             "- 询问当前时间（如：现在几点、当前时间、查询时间等）\n"
             "- 询问今天日期（如：今天几号、今天星期几、今天是什么日期等）\n"
@@ -79,37 +98,38 @@ class IntentProvider(IntentProviderBase):
             "返回格式要求：\n"
             "1. 必须返回纯JSON格式，不要包含任何其他文字\n"
             "2. 必须包含function_call字段\n"
-            "3. function_call必须包含name字段\n"
-            "4. 如果函数需要参数，必须包含arguments字段\n\n"
+            "3. 必须包含language字段，且只能使用支持的语言枚举\n"
+            "4. function_call必须包含name字段\n"
+            "5. 如果函数需要参数，必须包含arguments字段\n\n"
             "示例：\n"
             "```\n"
             "用户: 现在几点了？\n"
-            '返回: {"function_call": {"name": "result_for_context"}}\n'
+            '返回: {"language": "Chinese", "function_call": {"name": "result_for_context"}}\n'
             "```\n"
             "```\n"
             "用户: 当前电池电量是多少？\n"
-            '返回: {"function_call": {"name": "get_battery_level", "arguments": {"response_success": "当前电池电量为{value}%", "response_failure": "无法获取Battery的当前电量百分比"}}}\n'
+            '返回: {"language": "Chinese", "function_call": {"name": "get_battery_level", "arguments": {"response_success": "当前电池电量为{value}%", "response_failure": "无法获取Battery的当前电量百分比"}}}\n'
             "```\n"
             "```\n"
             "用户: 当前屏幕亮度是多少？\n"
-            '返回: {"function_call": {"name": "self_screen_get_brightness"}}\n'
+            '返回: {"language": "Chinese", "function_call": {"name": "self_screen_get_brightness"}}\n'
             "```\n"
             "```\n"
             "用户: 设置屏幕亮度为50%\n"
-            '返回: {"function_call": {"name": "self_screen_set_brightness", "arguments": {"brightness": 50}}}\n'
+            '返回: {"language": "Chinese", "function_call": {"name": "self_screen_set_brightness", "arguments": {"brightness": 50}}}\n'
             "```\n"
             "```\n"
             "用户: 我想结束对话\n"
-            '返回: {"function_call": {"name": "handle_exit_intent", "arguments": {"say_goodbye": "goodbye"}}}\n'
+            '返回: {"language": "Chinese", "function_call": {"name": "handle_exit_intent", "arguments": {"say_goodbye": "goodbye"}}}\n'
             "```\n"
             "```\n"
-            "用户: 你好啊\n"
-            '返回: {"function_call": {"name": "continue_chat"}}\n'
+            "用户: Hello there\n"
+            '返回: {"language": "English", "function_call": {"name": "continue_chat"}}\n'
             "```\n\n"
             "注意：\n"
             "1. 只返回JSON格式，不要包含任何其他文字\n"
-            '2. 优先检查用户查询是否为基础信息（时间、日期等），如是则返回{"function_call": {"name": "result_for_context"}}，不需要arguments参数\n'
-            '3. 如果没有找到匹配的函数，返回{"function_call": {"name": "continue_chat"}}\n'
+            '2. 优先检查用户查询是否为基础信息（时间、日期等），如是则返回{"language": "<语言枚举>", "function_call": {"name": "result_for_context"}}，不需要arguments参数\n'
+            '3. 如果没有找到匹配的函数，返回{"language": "<语言枚举>", "function_call": {"name": "continue_chat"}}\n'
             "4. 确保返回的JSON格式正确，包含所有必要的字段\n"
             "5. result_for_context不需要任何参数，系统会自动从上下文获取信息\n"
             "特殊说明：\n"
@@ -153,6 +173,7 @@ class IntentProvider(IntentProviderBase):
         # 检查缓存
         cached_intent = self.cache_manager.get(self.CacheType.INTENT, cache_key)
         if cached_intent is not None:
+            cached_intent = self._normalize_intent_language(cached_intent, text)
             cache_time = time.time() - total_start_time
             logger.bind(tag=TAG).debug(
                 f"使用缓存的意图: {cache_key} -> {cached_intent}, 耗时: {cache_time:.4f}秒"
@@ -212,7 +233,9 @@ class IntentProvider(IntentProviderBase):
             )
         except Exception as e:
             logger.bind(tag=TAG).error(f"Error in intent detection LLM call: {e}")
-            return '{"function_call": {"name": "continue_chat"}}'
+            return self._normalize_intent_language(
+                '{"function_call": {"name": "continue_chat"}}', text
+            )
 
         # 记录LLM调用完成时间
         llm_time = time.time() - llm_start_time
@@ -239,6 +262,11 @@ class IntentProvider(IntentProviderBase):
         # 尝试解析为JSON
         try:
             intent_data = json.loads(intent)
+            language = resolve_interaction_language(
+                intent_data.get("language"), text, default="Chinese"
+            )
+            intent_data["language"] = language
+            conn.current_language = language
             # 如果包含function_call，则格式化为适合处理的格式
             if "function_call" in intent_data:
                 function_data = intent_data["function_call"]
@@ -247,7 +275,7 @@ class IntentProvider(IntentProviderBase):
 
                 # 记录识别到的function call
                 logger.bind(tag=TAG).info(
-                    f"llm 识别到意图: {function_name}, 参数: {function_args}"
+                    f"llm 识别到意图: {function_name}, 语言: {language}, 参数: {function_args}"
                 )
 
                 # 处理不同类型的意图
@@ -272,6 +300,7 @@ class IntentProvider(IntentProviderBase):
                     logger.bind(tag=TAG).info(f"检测到函数调用意图: {function_name}")
 
             # 统一缓存处理和返回
+            intent = json.dumps(intent_data, ensure_ascii=False)
             self.cache_manager.set(self.CacheType.INTENT, cache_key, intent)
             postprocess_time = time.time() - postprocess_start_time
             logger.bind(tag=TAG).debug(f"意图后处理耗时: {postprocess_time:.4f}秒")
@@ -283,4 +312,6 @@ class IntentProvider(IntentProviderBase):
                 f"无法解析意图JSON: {intent}, 后处理耗时: {postprocess_time:.4f}秒"
             )
             # 如果解析失败，默认返回继续聊天意图
-            return '{"function_call": {"name": "continue_chat"}}'
+            return self._normalize_intent_language(
+                '{"function_call": {"name": "continue_chat"}}', text
+            )
