@@ -291,12 +291,21 @@ class LLMProvider(LLMProviderBase):
 
         response = self.client.chat.completions.create(**request_params)
         try:
+            _log_json("OpenAI LLM非流式完整原始输出", response)
             choice = response.choices[0] if getattr(response, "choices", None) else None
             message = getattr(choice, "message", None) if choice else None
             content = getattr(message, "content", "") if message else ""
             reasoning_details = getattr(message, "reasoning_details", None) if message else None
 
             if content and str(content).strip():
+                think_filter = ThinkContentFilter()
+                filtered_content = think_filter.feed(str(content)) + think_filter.flush()
+                if filtered_content and filtered_content.strip():
+                    logger.bind(tag=TAG).debug(
+                        f"OpenAI 非流式输出内容: {filtered_content.strip()[:120]!r}"
+                    )
+                    return filtered_content
+
                 logger.bind(tag=TAG).debug(
                     f"OpenAI 非流式输出内容: {str(content).strip()[:120]!r}"
                 )

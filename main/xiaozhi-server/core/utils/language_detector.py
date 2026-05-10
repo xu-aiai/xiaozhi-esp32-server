@@ -119,9 +119,6 @@ def detect_language_with_llm(llm, text: str, current_language: str | None = None
         result = llm.response_no_stream(
             LANGUAGE_DETECT_SYSTEM_PROMPT,
             user_prompt,
-            temperature=0,
-            max_tokens=8,
-            top_p=0.1,
         )
     except TypeError:
         try:
