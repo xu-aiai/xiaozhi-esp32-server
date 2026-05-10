@@ -12,6 +12,23 @@ class MCPEndpointExecutor(ToolExecutor):
     def __init__(self, conn):
         self.conn = conn
 
+    @staticmethod
+    def _extract_business_error(result_json: Dict[str, Any]) -> str | None:
+        """识别MCP工具业务错误，避免把参数错误交给LLM反复自修。"""
+        if not isinstance(result_json, dict):
+            return None
+
+        if result_json.get("success") is False:
+            return str(result_json.get("msg") or result_json.get("message") or "工具返回失败")
+
+        data = result_json.get("data")
+        if isinstance(data, dict):
+            code = data.get("code")
+            if code not in (None, 0, "0"):
+                return str(data.get("msg") or data.get("message") or "工具返回业务错误")
+
+        return None
+
     async def execute(
         self, conn, tool_name: str, arguments: Dict[str, Any]
     ) -> ActionResponse:
@@ -45,6 +62,14 @@ class MCPEndpointExecutor(ToolExecutor):
                     resultJson = json.loads(result)
                 except Exception as e:
                     pass
+
+            if resultJson is not None:
+                business_error = self._extract_business_error(resultJson)
+                if business_error:
+                    return ActionResponse(
+                        action=Action.ERROR,
+                        response=business_error,
+                    )
 
             # 本地 Action 只处理内部约定的枚举值。
             # MCP 业务动作（如 select_device / ask_missing_info）统一交给 LLM 续写，
