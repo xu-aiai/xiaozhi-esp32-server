@@ -2,6 +2,7 @@ import requests
 from bs4 import BeautifulSoup
 from config.logger import setup_logging
 from plugins_func.register import register_function, ToolType, ActionResponse, Action
+from core.utils.language import get_qweather_language_code
 from core.utils.util import get_ip_info
 from typing import TYPE_CHECKING
 
@@ -111,8 +112,12 @@ WEATHER_CODE_MAP = {
 }
 
 
-def fetch_city_info(location, api_key, api_host):
-    url = f"https://{api_host}/geo/v2/city/lookup?key={api_key}&location={location}&lang=zh"
+def fetch_city_info(location, api_key, api_host, lang):
+    weather_lang = get_qweather_language_code(lang)
+    url = (
+        f"https://{api_host}/geo/v2/city/lookup?key={api_key}"
+        f"&location={location}&lang={weather_lang}"
+    )
     response = requests.get(url, headers=HEADERS).json()
     if response.get("error") is not None:
         logger.bind(tag=TAG).error(
@@ -195,7 +200,7 @@ def get_weather(conn: "ConnectionHandler", location: str = None, lang: str = "zh
         return ActionResponse(Action.REQLLM, cached_weather_report, None)
 
     # 缓存未命中，获取实时天气数据
-    city_info = fetch_city_info(location, api_key, api_host)
+    city_info = fetch_city_info(location, api_key, api_host, lang)
     if not city_info:
         return ActionResponse(
             Action.REQLLM, f"未找到相关的城市: {location}，请确认地点是否正确", None
@@ -205,22 +210,26 @@ def get_weather(conn: "ConnectionHandler", location: str = None, lang: str = "zh
         return ActionResponse(Action.REQLLM, None, "请求失败")
     city_name, current_abstract, current_basic, temps_list = parse_weather_info(soup)
 
-    weather_report = f"您查询的位置是：{city_name}\n\n当前天气: {current_abstract}\n"
+    current_basic_lines = []
+    for key, value in current_basic.items():
+        if value != "0":
+            current_basic_lines.append(f"{key}: {value}")
 
-    # 添加有效的当前天气参数
-    if current_basic:
-        weather_report += "详细参数：\n"
-        for key, value in current_basic.items():
-            if value != "0":  # 过滤无效值
-                weather_report += f"  · {key}: {value}\n"
-
-    # 添加7天预报
-    weather_report += "\n未来7天预报：\n"
+    forecast_lines = []
     for date, weather, high, low in temps_list:
-        weather_report += f"{date}: {weather}，气温 {low}~{high}\n"
+        forecast_lines.append(f"{date}: {weather}, {low}~{high}")
 
-    # 提示语
-    weather_report += "\n（如需某一天的具体天气，请告诉我日期）"
+    weather_report = (
+        f"根据下列天气数据，用{lang}回应用户的天气查询请求：\n\n"
+        f"查询地点: {location}\n"
+        f"解析城市: {city_name}\n"
+        f"当前天气概况: {current_abstract}\n"
+        f"当前详细参数:\n"
+        + ("\n".join(current_basic_lines) if current_basic_lines else "无")
+        + "\n未来7天预报:\n"
+        + ("\n".join(forecast_lines) if forecast_lines else "无")
+        + "\n\n请自然回答天气情况；如果适合，可顺带提醒用户可以继续追问某一天的详细天气。"
+    )
 
     # 缓存完整的天气报告
     cache_manager.set(CacheType.WEATHER, weather_cache_key, weather_report)

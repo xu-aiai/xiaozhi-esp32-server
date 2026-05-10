@@ -14,6 +14,10 @@ from .device_iot import DeviceIoTExecutor
 from .device_mcp import DeviceMCPExecutor
 from .mcp_endpoint import MCPEndpointExecutor
 from core.handle.sendAudioHandle import send_display_message
+from core.utils.language import (
+    get_conn_downstream_language,
+    get_conn_plugin_language,
+)
 
 
 class UnifiedToolHandler:
@@ -132,6 +136,52 @@ class UnifiedToolHandler:
         self.tool_manager.refresh_tools()
         self.logger.info("函数描述列表已刷新")
 
+    def _inject_language_argument(
+        self, function_name: str, arguments: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """按统一 tool schema 自动补 language / lang / locale 参数。"""
+        if not isinstance(arguments, dict):
+            return arguments
+
+        tool_definition = self.tool_manager.get_all_tools().get(function_name)
+        if not tool_definition or not isinstance(
+            getattr(tool_definition, "description", None), dict
+        ):
+            return arguments
+
+        properties = (
+            tool_definition.description.get("function", {})
+            .get("parameters", {})
+            .get("properties", {})
+        )
+        if not isinstance(properties, dict) or not properties:
+            return arguments
+
+        if arguments.get("lang"):
+            return dict(arguments)
+
+        enriched_arguments = dict(arguments)
+
+        if "language" in properties and not enriched_arguments.get("language"):
+            enriched_arguments["language"] = get_conn_downstream_language(self.conn)
+            self.logger.debug(
+                f"已为工具自动补充 language 参数: {function_name} -> {enriched_arguments['language']}"
+            )
+
+        if "lang" in properties and not enriched_arguments.get("lang"):
+            enriched_arguments["lang"] = get_conn_plugin_language(self.conn)
+            self.logger.debug(
+                f"已为工具自动补充 lang 参数: {function_name} -> {enriched_arguments['lang']}"
+            )
+
+        if "locale" in properties and not enriched_arguments.get("locale"):
+            enriched_arguments["locale"] = get_conn_plugin_language(self.conn)
+            self.logger.debug(
+                f"已为工具自动补充 locale 参数: {function_name} -> {enriched_arguments['locale']}"
+            )
+
+        return enriched_arguments
+
     def has_tool(self, tool_name: str) -> bool:
         """检查是否有指定工具"""
         return self.tool_manager.has_tool(tool_name)
@@ -145,8 +195,12 @@ class UnifiedToolHandler:
             if "function_calls" in function_call_data:
                 responses = []
                 for call in function_call_data["function_calls"]:
+                    call_arguments = call.get("arguments", {})
+                    call_arguments = self._inject_language_argument(
+                        call["name"], call_arguments
+                    )
                     result = await self.tool_manager.execute_tool(
-                        call["name"], call.get("arguments", {})
+                        call["name"], call_arguments
                     )
                     responses.append(result)
                 return self._combine_responses(responses)
@@ -165,6 +219,8 @@ class UnifiedToolHandler:
                         action=Action.ERROR,
                         response="无法解析函数参数",
                     )
+
+            arguments = self._inject_language_argument(function_name, arguments)
 
             self.logger.debug(f"调用函数: {function_name}, 参数: {arguments}")
 

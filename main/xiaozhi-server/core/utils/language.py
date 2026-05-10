@@ -1,5 +1,42 @@
 """语言配置归一化工具。"""
 
+_SUPPORTED_LANGUAGES = {
+    "zh": "zh-CN",
+    "zh-cn": "zh-CN",
+    "en": "en-US",
+    "en-us": "en-US",
+}
+
+PLUGIN_LANGUAGE_CODE_MAP = {
+    "Chinese": "zh_CN",
+    "English": "en_US",
+    "Japanese": "ja_JP",
+    "Korean": "ko_KR",
+    "French": "fr_FR",
+    "German": "de_DE",
+    "Russian": "ru_RU",
+    "Portuguese": "pt_PT",
+    "Spanish": "es_ES",
+    "Italian": "it_IT",
+    "Arabic": "ar_SA",
+}
+
+QWEATHER_LANGUAGE_CODE_MAP = {
+    "zh_CN": "zh",
+    "zh_HK": "zh-hk",
+    "en_US": "en",
+    "ja_JP": "ja",
+    "ko_KR": "ko",
+    "fr_FR": "fr",
+    "de_DE": "de",
+    "ru_RU": "ru",
+    "pt_PT": "pt",
+    "pt_BR": "pt",
+    "es_ES": "es",
+    "it_IT": "it",
+    "ar_SA": "ar",
+}
+
 TTS_LANGUAGE_ALIASES = {
     "auto": "Auto",
     "automatic": "Auto",
@@ -29,6 +66,9 @@ TTS_LANGUAGE_ALIASES = {
     "意大利语": "Italian",
     "italian": "Italian",
     "it": "Italian",
+    "阿拉伯语": "Arabic",
+    "arabic": "Arabic",
+    "ar": "Arabic",
     "日语": "Japanese",
     "日文": "Japanese",
     "japanese": "Japanese",
@@ -55,6 +95,7 @@ PROMPT_LANGUAGE_ALIASES = {
     "French": "法文",
     "German": "德文",
     "Italian": "意大利文",
+    "Arabic": "阿拉伯文",
     "Japanese": "日文",
     "Korean": "韩文",
     "Portuguese": "葡萄牙文",
@@ -83,3 +124,51 @@ def normalize_prompt_language(language, default="中文"):
     if not normalized_language:
         return default
     return PROMPT_LANGUAGE_ALIASES.get(normalized_language, normalized_language)
+
+
+def get_session_tts_language(conn, fallback=None):
+    """优先读取当前会话语言，其次回退到配置值。"""
+    session_language = getattr(conn, "current_language", None) if conn else None
+    if session_language:
+        return normalize_tts_language(session_language, default=fallback or "Chinese")
+    return normalize_tts_language(fallback, default="Chinese")
+
+
+def get_plugin_language_code(language, default="zh_CN"):
+    """将会话语言或别名转换为插件使用的 locale code。"""
+    normalized = normalize_tts_language(language, default="")
+    if not normalized:
+        return default
+    return PLUGIN_LANGUAGE_CODE_MAP.get(normalized, default)
+
+
+def get_conn_plugin_language(conn, default="zh_CN"):
+    """从连接对象读取当前插件语言码。"""
+    session_language = getattr(conn, "current_language", None) if conn else None
+    return get_plugin_language_code(session_language, default=default)
+
+
+def get_qweather_language_code(language_code, default="zh"):
+    """将插件语言码转换为和风天气语言码。"""
+    if language_code is None:
+        return default
+    code = str(language_code).strip()
+    if not code:
+        return default
+    return QWEATHER_LANGUAGE_CODE_MAP.get(code, default)
+
+
+def get_supported_downstream_language(language, default="zh-CN"):
+    """将当前会话语言收口为下游仅支持的 language 值。"""
+    normalized = normalize_tts_language(language, default="")
+    if normalized == "English":
+        key = "en"
+    else:
+        key = "zh"
+    return _SUPPORTED_LANGUAGES.get(key, default)
+
+
+def get_conn_downstream_language(conn, default="zh-CN"):
+    """从连接对象读取当前会话语言，并映射为下游受支持的 language。"""
+    session_language = getattr(conn, "current_language", None) if conn else None
+    return get_supported_downstream_language(session_language, default=default)

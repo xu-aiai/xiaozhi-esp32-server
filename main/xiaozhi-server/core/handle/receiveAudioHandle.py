@@ -8,6 +8,10 @@ if TYPE_CHECKING:
 from core.utils.util import audio_to_data
 from core.handle.abortHandle import handleAbortMessage
 from core.handle.intentHandler import handle_user_intent
+from core.utils.language_detector import (
+    detect_language_with_llm,
+    update_session_language,
+)
 from core.utils.output_counter import check_device_output_limit
 from core.handle.sendAudioHandle import send_stt_message, SentenceType
 
@@ -41,6 +45,7 @@ async def startToChat(conn: "ConnectionHandler", text):
     speaker_name = None
     language_tag = None
     actual_text = text
+    detection_text = text
 
     try:
         # 尝试解析JSON格式的输入
@@ -50,6 +55,7 @@ async def startToChat(conn: "ConnectionHandler", text):
                 speaker_name = data["speaker"]
                 language_tag = data["language"]
                 actual_text = data["content"]
+                detection_text = data["content"]
                 conn.logger.bind(tag=TAG).info(f"解析到说话人信息: {speaker_name}")
 
                 # 直接使用JSON格式的文本，不解析
@@ -79,6 +85,22 @@ async def startToChat(conn: "ConnectionHandler", text):
     # manual 模式下不打断正在播放的内容
     if conn.client_is_speaking and conn.client_listen_mode != "manual":
         await handleAbortMessage(conn)
+
+    # 使用主LLM进行轻量语言分类，再驱动当前会话的Prompt和TTS语言
+    try:
+        loop = asyncio.get_running_loop()
+        detected_language = await loop.run_in_executor(
+            conn.executor,
+            lambda: detect_language_with_llm(
+                conn.llm, detection_text, getattr(conn, "current_language", None)
+            ),
+        )
+        conn.current_language = update_session_language(
+            conn, detected_language, detection_text
+        )
+        conn.refresh_system_prompt_for_language()
+    except Exception as e:
+        conn.logger.bind(tag=TAG).warning(f"语言检测失败，继续沿用当前语言: {e}")
 
     # 首先进行意图分析，使用实际文本内容
     intent_handled = await handle_user_intent(conn, actual_text)

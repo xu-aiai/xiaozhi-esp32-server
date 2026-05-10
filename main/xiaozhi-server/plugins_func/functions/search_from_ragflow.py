@@ -18,8 +18,14 @@ SEARCH_FROM_RAGFLOW_FUNCTION_DESC = {
         "description": "从知识库中查询信息",
         "parameters": {
             "type": "object",
-            "properties": {"question": {"type": "string", "description": "查询的问题"}},
-            "required": ["question"],
+            "properties": {
+                "question": {"type": "string", "description": "查询的问题"},
+                "lang": {
+                    "type": "string",
+                    "description": "返回用户使用的语言code，例如zh_CN/zh_HK/en_US/ja_JP等，默认zh_CN",
+                },
+            },
+            "required": ["question", "lang"],
         },
     },
 }
@@ -28,7 +34,9 @@ SEARCH_FROM_RAGFLOW_FUNCTION_DESC = {
 @register_function(
     "search_from_ragflow", SEARCH_FROM_RAGFLOW_FUNCTION_DESC, ToolType.SYSTEM_CTL
 )
-def search_from_ragflow(conn: "ConnectionHandler", question=None):
+def search_from_ragflow(
+    conn: "ConnectionHandler", question=None, lang: str = "zh_CN"
+):
     # 确保字符串参数正确处理编码
     if question and isinstance(question, str):
         # 确保问题参数是UTF-8编码的字符串
@@ -86,7 +94,11 @@ def search_from_ragflow(conn: "ConnectionHandler", question=None):
             if error_detail:
                 error_response += f"\n详情：{error_detail}"
 
-            return ActionResponse(Action.RESPONSE, None, error_response)
+            return ActionResponse(
+                Action.REQLLM,
+                f"根据下列错误信息，用{lang}告知用户知识库查询失败：\n{error_response}",
+                None,
+            )
 
         chunks = result.get("data", {}).get("chunks", [])
         contents = []
@@ -103,11 +115,19 @@ def search_from_ragflow(conn: "ConnectionHandler", question=None):
 
         if contents:
             # 组织知识库内容为引用模式
-            context_text = f"# 关于问题【{question}】查到知识库如下\n"
+            context_text = (
+                f"根据下列知识库检索结果，用{lang}回答用户的问题。\n"
+                f"用户问题: {question}\n"
+                f"知识库内容如下:\n"
+            )
             context_text += "```\n\n\n".join(contents[:5])
             context_text += "\n```"
         else:
-            context_text = "根据知识库查询结果，没有相关信息。"
+            context_text = (
+                f"根据下列信息，用{lang}告知用户知识库里暂时没有相关内容：\n"
+                f"用户问题: {question}\n"
+                "知识库查询结果：无相关信息。"
+            )
         return ActionResponse(Action.REQLLM, context_text, None)
 
     except requests.exceptions.RequestException as e:
@@ -152,7 +172,11 @@ def search_from_ragflow(conn: "ConnectionHandler", question=None):
         else:
             error_response = f"RAG接口网络异常（{error_type}）：{str(e)}"
 
-        return ActionResponse(Action.RESPONSE, None, error_response)
+        return ActionResponse(
+            Action.REQLLM,
+            f"根据下列错误信息，用{lang}告知用户知识库查询失败：\n{error_response}",
+            None,
+        )
 
     except Exception as e:
         # 其他异常
@@ -163,4 +187,8 @@ def search_from_ragflow(conn: "ConnectionHandler", question=None):
 
         # 提供详细的错误信息
         error_response = f"RAG接口处理异常（{error_type}）：{str(e)}"
-        return ActionResponse(Action.RESPONSE, None, error_response)
+        return ActionResponse(
+            Action.REQLLM,
+            f"根据下列错误信息，用{lang}告知用户知识库查询失败：\n{error_response}",
+            None,
+        )

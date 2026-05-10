@@ -139,6 +139,8 @@ class ConnectionHandler:
         self.asr_audio = []
         self.asr_audio_queue = queue.Queue()
         self.current_speaker = None  # 存储当前说话人
+        self.current_language = "Chinese"
+        self.language_detect_history = deque(maxlen=3)
 
         # llm相关变量
         self.dialogue = Dialogue()
@@ -517,7 +519,7 @@ class ConnectionHandler:
         # 更新上下文信息
         self.prompt_manager.update_context_info(self, self.client_ip)
         enhanced_prompt = self.prompt_manager.build_enhanced_prompt(
-            self.config["prompt"], self.device_id, self.client_ip
+            self.config["prompt"], self.device_id, self.client_ip, conn=self
         )
         if enhanced_prompt:
             self.change_system_prompt(enhanced_prompt)
@@ -902,6 +904,21 @@ class ConnectionHandler:
         self.prompt = prompt
         # 更新系统prompt至上下文
         self.dialogue.update_system_message(self.prompt)
+
+    def refresh_system_prompt_for_language(self):
+        if self.config.get("prompt") is None:
+            return
+        enhanced_prompt = self.prompt_manager.build_enhanced_prompt(
+            self.config["prompt"],
+            self.device_id,
+            self.client_ip,
+            conn=self,
+        )
+        if enhanced_prompt:
+            self.change_system_prompt(enhanced_prompt)
+            self.logger.bind(tag=TAG).debug(
+                f"已按当前语言刷新系统提示词: {self.current_language}"
+            )
 
     def chat(self, query, depth=0):
         # 保存当前任务的sentence_id到局部变量，避免被新任务覆盖

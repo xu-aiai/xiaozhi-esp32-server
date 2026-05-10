@@ -2,7 +2,7 @@ import requests
 
 from config.logger import setup_logging
 from core.providers.tts.base import TTSProviderBase
-from core.utils.language import normalize_tts_language
+from core.utils.language import get_session_tts_language, normalize_tts_language
 from core.utils.util import check_model_key
 
 TAG = __name__
@@ -51,6 +51,7 @@ class TTSProvider(TTSProviderBase):
         )
 
     async def text_to_speak(self, text, output_file):
+        current_language = get_session_tts_language(self.conn, self.language)
         headers = {"Content-Type": "application/json"}
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
@@ -58,7 +59,7 @@ class TTSProvider(TTSProviderBase):
         data = {
             "input": text,
             "voice": self.voice,
-            "language": self.language,
+            "language": current_language,
             "response_format": self.audio_file_type,
             "task_type": self.task_type,
             "stream": False,
@@ -80,7 +81,7 @@ class TTSProvider(TTSProviderBase):
         logger.bind(tag=TAG).info(
             "发起上游TTS请求: "
             f"url={self.api_url}, text_len={len(text)}, text_preview={text[:80]}, "
-            f"voice={self.voice}, language={self.language}, task_type={self.task_type}, "
+            f"voice={self.voice}, language={current_language}, task_type={self.task_type}, "
             f"format={self.audio_file_type}, output_file={output_file or '<memory>'}"
         )
         response = requests.post(

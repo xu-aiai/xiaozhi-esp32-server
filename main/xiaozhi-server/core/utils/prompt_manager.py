@@ -225,7 +225,13 @@ class PromptManager:
             self.logger.bind(tag=TAG).error(f"更新上下文信息失败: {e}")
 
     def build_enhanced_prompt(
-        self, user_prompt: str, device_id: str, client_ip: str = None, *args, **kwargs
+        self,
+        user_prompt: str,
+        device_id: str,
+        client_ip: str = None,
+        conn: "ConnectionHandler" = None,
+        *args,
+        **kwargs,
     ) -> str:
         """构建增强的系统提示词"""
         if not self.base_prompt_template:
@@ -252,13 +258,15 @@ class PromptManager:
                         or ""
                     )
 
-            # 获取TTS选择的语言，默认值为中文
-            raw_language = (
-                self.config.get("TTS", {})
-                .get(self.config.get("selected_module", {}).get("TTS", ""), {})
-                .get("language")
-                or "中文"
-            )
+            # 优先使用当前会话语言，没有则回退到TTS静态配置
+            raw_language = getattr(conn, "current_language", None)
+            if not raw_language:
+                raw_language = (
+                    self.config.get("TTS", {})
+                    .get(self.config.get("selected_module", {}).get("TTS", ""), {})
+                    .get("language")
+                    or "中文"
+                )
             language = normalize_prompt_language(raw_language)
             self.logger.bind(tag=TAG).debug(f"获取到选择的语言: {language}")
 
@@ -280,7 +288,8 @@ class PromptManager:
                 *args,
                 **kwargs,
             )
-            device_cache_key = f"device_prompt:{device_id}"
+            cache_lang = getattr(conn, "current_language", None) or language
+            device_cache_key = f"device_prompt:{device_id}:{cache_lang}"
             self.cache_manager.set(
                 self.CacheType.DEVICE_PROMPT, device_cache_key, enhanced_prompt
             )
