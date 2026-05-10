@@ -259,6 +259,62 @@ class LLMProvider(LLMProviderBase):
         finally:
             responses.close()
 
+    def response_no_stream(self, system_prompt, user_prompt, **kwargs):
+        """非流式请求，适合短分类任务如语言检测。"""
+        dialogue = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ]
+        dialogue = self.normalize_dialogue(dialogue)
+        dialogue = self._merge_system_messages_if_needed(dialogue)
+
+        request_params = {
+            "model": self.model_name,
+            "messages": dialogue,
+            "stream": False,
+        }
+
+        optional_params = {
+            "max_tokens": kwargs.get("max_tokens", self.max_tokens),
+            "temperature": kwargs.get("temperature", self.temperature),
+            "top_p": kwargs.get("top_p", self.top_p),
+            "frequency_penalty": kwargs.get("frequency_penalty", self.frequency_penalty),
+        }
+
+        for key, value in optional_params.items():
+            if value is not None:
+                request_params[key] = value
+
+        self._apply_thinking_disabled(request_params)
+        self._apply_minimax_reasoning_split(request_params)
+        _log_json("OpenAI LLM非流式输入参数", request_params)
+
+        response = self.client.chat.completions.create(**request_params)
+        try:
+            choice = response.choices[0] if getattr(response, "choices", None) else None
+            message = getattr(choice, "message", None) if choice else None
+            content = getattr(message, "content", "") if message else ""
+            reasoning_details = getattr(message, "reasoning_details", None) if message else None
+
+            if content and str(content).strip():
+                logger.bind(tag=TAG).debug(
+                    f"OpenAI 非流式输出内容: {str(content).strip()[:120]!r}"
+                )
+                return content
+
+            if reasoning_details:
+                logger.bind(tag=TAG).debug(
+                    f"OpenAI 非流式 reasoning_details: {str(reasoning_details)[:120]!r}"
+                )
+                if isinstance(reasoning_details, str) and reasoning_details.strip():
+                    return reasoning_details
+
+            logger.bind(tag=TAG).warning("OpenAI 非流式响应为空")
+            return ""
+        finally:
+            if hasattr(response, "close"):
+                response.close()
+
     def response_with_functions(self, session_id, dialogue, functions=None, **kwargs):
         dialogue = self.normalize_dialogue(dialogue)
         dialogue = self._merge_system_messages_if_needed(dialogue)
