@@ -157,27 +157,35 @@ class UnifiedToolHandler:
         if not isinstance(properties, dict) or not properties:
             return arguments
 
-        if arguments.get("lang"):
-            return dict(arguments)
-
         enriched_arguments = dict(arguments)
+        injected_fields = {}
 
         if "language" in properties and not enriched_arguments.get("language"):
             enriched_arguments["language"] = get_conn_downstream_language(self.conn)
-            self.logger.debug(
-                f"已为工具自动补充 language 参数: {function_name} -> {enriched_arguments['language']}"
-            )
+            injected_fields["language"] = enriched_arguments["language"]
 
         if "lang" in properties and not enriched_arguments.get("lang"):
             enriched_arguments["lang"] = get_conn_plugin_language(self.conn)
-            self.logger.debug(
-                f"已为工具自动补充 lang 参数: {function_name} -> {enriched_arguments['lang']}"
-            )
+            injected_fields["lang"] = enriched_arguments["lang"]
 
         if "locale" in properties and not enriched_arguments.get("locale"):
             enriched_arguments["locale"] = get_conn_plugin_language(self.conn)
+            injected_fields["locale"] = enriched_arguments["locale"]
+
+        if injected_fields:
+            self.logger.info(
+                f"工具自动补充语言参数: tool={function_name}, injected={injected_fields}, current_language={getattr(self.conn, 'current_language', None)}"
+            )
+        elif any(
+            key in properties for key in ("language", "lang", "locale")
+        ):
+            existing_fields = {
+                key: enriched_arguments.get(key)
+                for key in ("language", "lang", "locale")
+                if enriched_arguments.get(key)
+            }
             self.logger.debug(
-                f"已为工具自动补充 locale 参数: {function_name} -> {enriched_arguments['locale']}"
+                f"工具已携带语言参数，无需自动补充: tool={function_name}, existing={existing_fields}"
             )
 
         return enriched_arguments

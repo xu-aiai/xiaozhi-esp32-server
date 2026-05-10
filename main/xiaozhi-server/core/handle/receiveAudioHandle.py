@@ -88,6 +88,7 @@ async def startToChat(conn: "ConnectionHandler", text):
 
     # 使用主LLM进行轻量语言分类，再驱动当前会话的Prompt和TTS语言
     try:
+        previous_language = getattr(conn, "current_language", None)
         loop = asyncio.get_running_loop()
         detected_language = await loop.run_in_executor(
             conn.executor,
@@ -97,6 +98,11 @@ async def startToChat(conn: "ConnectionHandler", text):
         )
         conn.current_language = update_session_language(
             conn, detected_language, detection_text
+        )
+        conn.logger.bind(tag=TAG).info(
+            "语言识别结果: "
+            f"previous={previous_language or 'None'}, detected={detected_language}, "
+            f"final={conn.current_language}, text={detection_text[:120]!r}"
         )
         conn.refresh_system_prompt_for_language()
     except Exception as e:

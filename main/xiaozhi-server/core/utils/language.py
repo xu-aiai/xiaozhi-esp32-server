@@ -1,5 +1,10 @@
 """语言配置归一化工具。"""
 
+from config.logger import setup_logging
+
+TAG = __name__
+logger = setup_logging()
+
 _SUPPORTED_LANGUAGES = {
     "zh": "zh-CN",
     "zh-cn": "zh-CN",
@@ -129,9 +134,16 @@ def normalize_prompt_language(language, default="中文"):
 def get_session_tts_language(conn, fallback=None):
     """优先读取当前会话语言，其次回退到配置值。"""
     session_language = getattr(conn, "current_language", None) if conn else None
-    if session_language:
-        return normalize_tts_language(session_language, default=fallback or "Chinese")
-    return normalize_tts_language(fallback, default="Chinese")
+    resolved = normalize_tts_language(
+        session_language if session_language else fallback,
+        default="Chinese",
+    )
+    if resolved == "Auto":
+        logger.bind(tag=TAG).warning(
+            "TTS language 解析结果为 Auto，已回退为 Chinese"
+        )
+        return "Chinese"
+    return resolved
 
 
 def get_plugin_language_code(language, default="zh_CN"):

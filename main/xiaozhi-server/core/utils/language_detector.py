@@ -96,10 +96,18 @@ def detect_language_with_llm(llm, text: str, current_language: str | None = None
     """使用主LLM做轻量语言分类。"""
     normalized_text = _normalize_text(text)
     if not normalized_text:
+        logger.bind(tag=TAG).debug("语言检测跳过：输入为空，沿用当前会话语言")
         return current_language or "Chinese"
 
     if _looks_too_short(normalized_text):
+        logger.bind(tag=TAG).debug(
+            f"语言检测跳过：输入过短，text={normalized_text[:80]!r}, current={current_language or 'None'}"
+        )
         return current_language or "Unknown"
+
+    logger.bind(tag=TAG).info(
+        f"开始语言检测: current={current_language or 'None'}, text={normalized_text[:120]!r}"
+    )
 
     user_prompt = (
         f"当前会话语言：{current_language or 'None'}\n"
@@ -131,7 +139,7 @@ def detect_language_with_llm(llm, text: str, current_language: str | None = None
     detected = _normalize_detected_language(result)
     if detected:
         logger.bind(tag=TAG).info(
-            f"语言检测成功: text={normalized_text[:80]!r}, detected={detected}"
+            f"语言检测成功: text={normalized_text[:80]!r}, raw={str(result).strip()!r}, detected={detected}"
         )
         return detected
 
@@ -154,15 +162,22 @@ def update_session_language(conn, detected_language: str, text: str) -> str:
         conn.language_detect_history = deque(maxlen=3)
 
     if detected_language == "Unknown":
-        logger.bind(tag=TAG).debug("语言检测为Unknown，沿用当前会话语言")
+        logger.bind(tag=TAG).info(
+            f"语言检测结果为Unknown，沿用当前会话语言: current={current_language}, text={normalized_text[:80]!r}"
+        )
         return current_language
 
     if _looks_too_short(normalized_text):
-        logger.bind(tag=TAG).debug("输入过短，不触发语言切换")
+        logger.bind(tag=TAG).info(
+            f"输入过短，不触发语言切换: current={current_language}, detected={detected_language}, text={normalized_text[:80]!r}"
+        )
         return current_language
 
     if current_language == detected_language:
         conn.language_detect_history.clear()
+        logger.bind(tag=TAG).info(
+            f"语言检测结果与当前会话语言一致: current={current_language}, text={normalized_text[:80]!r}"
+        )
         return current_language
 
     conn.language_detect_history.append(detected_language)
@@ -184,6 +199,6 @@ def update_session_language(conn, detected_language: str, text: str) -> str:
         return detected_language
 
     logger.bind(tag=TAG).debug(
-        f"暂不切换会话语言: current={current_language}, detected={detected_language}"
+        f"暂不切换会话语言: current={current_language}, detected={detected_language}, history={list(conn.language_detect_history)}, text={normalized_text[:80]!r}"
     )
     return current_language
