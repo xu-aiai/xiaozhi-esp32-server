@@ -36,6 +36,8 @@ SHORT_CONFIRMATION_WORDS = {
     "thank you",
 }
 
+LATIN_WORD_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9_+-]*[.!?。！？,，;；:：]*$")
+
 LANGUAGE_DETECT_SYSTEM_PROMPT = """你是语言识别器。
 任务：根据用户文本判断最适合用于回复和TTS播报的语言。
 只允许输出以下枚举之一：
@@ -76,6 +78,11 @@ def _looks_too_short(text: str) -> bool:
     if compact.lower() in SHORT_CONFIRMATION_WORDS:
         return True
     return False
+
+
+def _is_single_latin_word(text: str) -> bool:
+    compact = re.sub(r"\s+", " ", text).strip()
+    return bool(LATIN_WORD_PATTERN.fullmatch(compact))
 
 
 def _normalize_detected_language(language: str | None) -> str | None:
@@ -167,6 +174,12 @@ def update_session_language(conn, detected_language: str, text: str) -> str:
     if _looks_too_short(normalized_text):
         logger.bind(tag=TAG).info(
             f"输入过短，不触发语言切换: current={current_language}, detected={detected_language}, text={normalized_text[:80]!r}"
+        )
+        return current_language
+
+    if detected_language != current_language and _is_single_latin_word(normalized_text):
+        logger.bind(tag=TAG).info(
+            f"单个拉丁词不触发语言切换: current={current_language}, detected={detected_language}, text={normalized_text[:80]!r}"
         )
         return current_language
 
