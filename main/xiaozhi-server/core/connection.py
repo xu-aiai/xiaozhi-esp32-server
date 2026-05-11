@@ -10,6 +10,7 @@ import threading
 import traceback
 import subprocess
 import websockets
+from urllib.parse import parse_qs, urlparse
 
 from core.utils.util import (
     extract_json_from_string,
@@ -200,7 +201,14 @@ class ConnectionHandler:
 
             # 检查是否来自MQTT连接
             request_path = ws.request.path
-            self.conn_from_mqtt_gateway = request_path.endswith("?from=mqtt_gateway")
+            parsed_request_path = urlparse(request_path)
+            query_params = parse_qs(parsed_request_path.query)
+            self.conn_from_mqtt_gateway = (
+                query_params.get("from", [""])[0] == "mqtt_gateway"
+            )
+            self.logger.bind(tag=TAG).info(
+                f"WebSocket连接路径: {request_path}, from_mqtt_gateway={self.conn_from_mqtt_gateway}"
+            )
             if self.conn_from_mqtt_gateway:
                 self.logger.bind(tag=TAG).info("连接来自:MQTT网关")
 
@@ -323,12 +331,22 @@ class ConnectionHandler:
                 await asyncio.wait_for(self.bind_completed_event.wait(), timeout=1)
             except asyncio.TimeoutError:
                 # 超时仍未获取到真实状态，丢弃消息
+                message_type = "text" if isinstance(message, str) else "binary"
+                message_len = len(message) if hasattr(message, "__len__") else 0
+                self.logger.bind(tag=TAG).debug(
+                    f"绑定状态未完成，丢弃{message_type}消息: len={message_len}"
+                )
                 await self._discard_message_with_bind_prompt()
                 return
 
         # 已经获取到真实状态，检查是否需要绑定
         if self.need_bind:
             # 需要绑定，丢弃消息
+            message_type = "text" if isinstance(message, str) else "binary"
+            message_len = len(message) if hasattr(message, "__len__") else 0
+            self.logger.bind(tag=TAG).debug(
+                f"设备待绑定，丢弃{message_type}消息: len={message_len}"
+            )
             await self._discard_message_with_bind_prompt()
             return
 
@@ -338,6 +356,9 @@ class ConnectionHandler:
             await handleTextMessage(self, message)
         elif isinstance(message, bytes):
             if self.vad is None or self.asr is None:
+                self.logger.bind(tag=TAG).warning(
+                    f"收到音频帧但VAD/ASR未就绪，丢弃: len={len(message)}, vad_ready={self.vad is not None}, asr_ready={self.asr is not None}"
+                )
                 return
 
             # 处理来自MQTT网关的音频包
@@ -347,6 +368,9 @@ class ConnectionHandler:
                     return
 
             # 不需要头部处理或没有头部时，直接处理原始消息
+            self.logger.bind(tag=TAG).debug(
+                f"收到WebSocket音频帧: len={len(message)}, queue_size={self.asr_audio_queue.qsize()}"
+            )
             self.asr_audio_queue.put(message)
 
     async def _process_mqtt_audio_message(self, message):
