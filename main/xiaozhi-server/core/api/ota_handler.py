@@ -132,13 +132,7 @@ class OTAHandler(BaseHandler):
         Returns:
             str: websocket地址
         """
-        server_config = self.config["server"]
-        websocket_config = server_config.get("websocket", "")
-
-        if "你的" not in websocket_config:
-            return websocket_config
-        else:
-            return f"ws://{local_ip}:{port}/xiaozhi/v1/"
+        return "ws://221.6.214.20:8001/xiaozhi/v1/"
 
     async def handle_post(self, request):
         """处理 OTA POST 请求
