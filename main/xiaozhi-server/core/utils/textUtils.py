@@ -1,4 +1,5 @@
 import json
+import re
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -115,3 +116,19 @@ def is_emoji(char):
 def check_emoji(text):
     """去除文本中的所有emoji表情"""
     return "".join(char for char in text if not is_emoji(char) and char != "\n")
+
+
+def strip_markdown_for_display(text):
+    """清理常见 Markdown 标记，避免前端展示原始格式符号。"""
+    if text is None:
+        return ""
+
+    cleaned = str(text)
+    # 先移除代码块/行内代码和强调等常见标记
+    cleaned = re.sub(r"`{1,3}", "", cleaned)
+    cleaned = re.sub(r"(\*\*|__|\*|_+|~~)", "", cleaned)
+    # 移除标题、引用、列表等行首标记
+    cleaned = re.sub(r"(?m)^\s{0,3}(#{1,6}\s+|>\s+|[-*+]\s+)", "", cleaned)
+    # 将 markdown 链接转成纯文本
+    cleaned = re.sub(r"\[([^\]]+)\]\(([^)]+)\)", r"\1", cleaned)
+    return cleaned.strip()

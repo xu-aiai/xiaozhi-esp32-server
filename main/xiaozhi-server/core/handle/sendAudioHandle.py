@@ -269,7 +269,9 @@ async def send_tts_message(conn: "ConnectionHandler", state, text=None):
         return
     message = {"type": "tts", "state": state, "session_id": conn.session_id}
     if text is not None:
-        message["text"] = textUtils.check_emoji(text)
+        message["text"] = textUtils.strip_markdown_for_display(
+            textUtils.check_emoji(text)
+        )
 
     # TTS播放结束
     if state == "stop":
@@ -321,7 +323,9 @@ async def send_stt_message(conn: "ConnectionHandler", text):
     except (json.JSONDecodeError, TypeError):
         # 如果不是JSON格式，直接使用原始文本
         display_text = text
-    stt_text = textUtils.get_string_no_punctuation_or_emoji(display_text)
+    stt_text = textUtils.strip_markdown_for_display(
+        textUtils.get_string_no_punctuation_or_emoji(display_text)
+    )
     await conn.websocket.send(
         json.dumps({"type": "stt", "text": stt_text, "session_id": conn.session_id})
     )
@@ -334,7 +338,7 @@ async def send_display_message(conn: "ConnectionHandler", text):
     """发送纯显示消息"""
     message = {
         "type": "stt",
-        "text": text,
+        "text": textUtils.strip_markdown_for_display(text),
         "session_id": conn.session_id
     }
     await conn.websocket.send(json.dumps(message))

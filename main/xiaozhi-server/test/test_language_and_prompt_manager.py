@@ -35,6 +35,7 @@ sys.modules["jinja2"] = fake_jinja2
 
 from core.utils.language_detector import update_session_language
 from core.utils.prompt_manager import PromptManager
+from core.utils.textUtils import strip_markdown_for_display
 
 
 class UpdateSessionLanguageTest(unittest.TestCase):
@@ -69,6 +70,15 @@ class PromptManagerWeatherPrefetchTest(unittest.TestCase):
         result = manager._get_weather_info(conn, "上海")
 
         self.assertEqual(result, "")
+
+
+class TextUtilsTest(unittest.TestCase):
+    def test_strip_markdown_for_display(self):
+        text = "**你好**，请看[这里](https://example.com) 和 `code`"
+
+        result = strip_markdown_for_display(text)
+
+        self.assertEqual(result, "你好，请看这里 和 code")
 
 
 if __name__ == "__main__":
