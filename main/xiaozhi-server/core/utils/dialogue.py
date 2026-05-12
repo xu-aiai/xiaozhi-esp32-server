@@ -31,6 +31,10 @@ class Dialogue:
     def put(self, message: Message):
         self.dialogue.append(message)
 
+    def clear_temporary_messages(self):
+        """清理临时 few-shot 消息，保留 system 和真实对话历史。"""
+        self.dialogue = [message for message in self.dialogue if not message.is_temporary]
+
     def getMessages(self, m, dialogue):
         if m.tool_calls is not None:
             dialogue.append({"role": m.role, "tool_calls": m.tool_calls})

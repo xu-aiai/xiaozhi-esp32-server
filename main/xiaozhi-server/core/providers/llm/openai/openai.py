@@ -110,6 +110,15 @@ def _log_json(label, payload):
     )
 
 
+def _truncate_for_log(text, limit=2000):
+    if text is None:
+        return ""
+    value = str(text)
+    if len(value) <= limit:
+        return value
+    return value[:limit] + "...(truncated)"
+
+
 class LLMProvider(LLMProviderBase):
     def __init__(self, config):
         self.model_name = config.get("model_name")
@@ -241,6 +250,7 @@ class LLMProvider(LLMProviderBase):
         responses = self.client.chat.completions.create(**request_params)
 
         think_filter = ThinkContentFilter()
+        complete_output = []
         try:            
             for chunk in responses:
                 _log_json("OpenAI LLM完整原始输出chunk", chunk)
@@ -252,11 +262,17 @@ class LLMProvider(LLMProviderBase):
                 if content:
                     filtered_content = think_filter.feed(content)
                     if filtered_content and filtered_content.strip():
+                        complete_output.append(filtered_content)
                         yield filtered_content
             filtered_content = think_filter.flush()
             if filtered_content and filtered_content.strip():
+                complete_output.append(filtered_content)
                 yield filtered_content
         finally:
+            logger.bind(tag=TAG).info(
+                "OpenAI LLM流式完整出参: "
+                f"session_id={session_id}, text={_truncate_for_log(''.join(complete_output))}"
+            )
             responses.close()
 
     def response_no_stream(self, system_prompt, user_prompt, **kwargs):
@@ -301,19 +317,22 @@ class LLMProvider(LLMProviderBase):
                 think_filter = ThinkContentFilter()
                 filtered_content = think_filter.feed(str(content)) + think_filter.flush()
                 if filtered_content and filtered_content.strip():
-                    logger.bind(tag=TAG).debug(
-                        f"OpenAI 非流式输出内容: {filtered_content.strip()[:120]!r}"
+                    logger.bind(tag=TAG).info(
+                        "OpenAI LLM非流式完整出参: "
+                        f"text={_truncate_for_log(filtered_content.strip())}"
                     )
                     return filtered_content
 
-                logger.bind(tag=TAG).debug(
-                    f"OpenAI 非流式输出内容: {str(content).strip()[:120]!r}"
+                logger.bind(tag=TAG).info(
+                    "OpenAI LLM非流式完整出参: "
+                    f"text={_truncate_for_log(str(content).strip())}"
                 )
                 return content
 
             if reasoning_details:
-                logger.bind(tag=TAG).debug(
-                    f"OpenAI 非流式 reasoning_details: {str(reasoning_details)[:120]!r}"
+                logger.bind(tag=TAG).info(
+                    "OpenAI LLM非流式完整出参: "
+                    f"reasoning_details={_truncate_for_log(reasoning_details)}"
                 )
                 if isinstance(reasoning_details, str) and reasoning_details.strip():
                     return reasoning_details
@@ -354,6 +373,8 @@ class LLMProvider(LLMProviderBase):
         stream = self.client.chat.completions.create(**request_params)
 
         think_filter = ThinkContentFilter()
+        complete_output = []
+        complete_tool_calls = []
         try:
             for chunk in stream:
                 _log_json("OpenAI LLM完整原始输出chunk", chunk)
@@ -361,9 +382,13 @@ class LLMProvider(LLMProviderBase):
                     delta = chunk.choices[0].delta
                     content = getattr(delta, "content", "")
                     tool_calls = getattr(delta, "tool_calls", None)
+                    if tool_calls:
+                        complete_tool_calls.extend(_to_loggable(tool_calls))
                     filtered_content = think_filter.feed(content)
                     if filtered_content and not filtered_content.strip():
                         filtered_content = None
+                    if filtered_content:
+                        complete_output.append(filtered_content)
                     if filtered_content or tool_calls:
                         yield filtered_content, tool_calls
                 elif isinstance(getattr(chunk, "usage", None), CompletionUsage):
@@ -375,6 +400,12 @@ class LLMProvider(LLMProviderBase):
                     )
             filtered_content = think_filter.flush()
             if filtered_content and filtered_content.strip():
+                complete_output.append(filtered_content)
                 yield filtered_content, None
         finally:
+            logger.bind(tag=TAG).info(
+                "OpenAI LLM流式完整出参: "
+                f"session_id={session_id}, text={_truncate_for_log(''.join(complete_output))}, "
+                f"tool_calls={json.dumps(_to_loggable(complete_tool_calls), ensure_ascii=False, default=str)}"
+            )
             stream.close()

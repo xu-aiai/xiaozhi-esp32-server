@@ -5,6 +5,7 @@
 当前已包含：
 
 - [语音链路详细设计](./speech-upstream-asr-tts-design.md)
+- [完整问答工作流详细设计](./qa-workflow-design.md)
 
 建议后续新增文档时遵循以下规则：
 

@@ -47,6 +47,7 @@ from core.utils.tool_response import (
     wrap_tool_result_for_llm,
 )
 from core.utils import textUtils
+from core.utils.language_detector import detect_language_with_llm
 
 
 TAG = __name__
@@ -563,32 +564,86 @@ class ConnectionHandler:
         if not tools:
             return
 
+        self.dialogue.clear_temporary_messages()
+
         # 根据可用工具动态构建 few-shot 示例
         tool_names = {t.get("function", {}).get("name") for t in tools}
+        current_language = getattr(self, "current_language", None)
+        use_english_examples = current_language == "English"
+
+        exit_user_text = "Goodbye" if use_english_examples else "拜拜"
+        exit_tool_args = (
+            '{"say_goodbye": "Goodbye, talk to you next time~"}'
+            if use_english_examples
+            else '{"say_goodbye": "再见，下次再聊~"}'
+        )
+        exit_tool_result = (
+            "Exit intent handled" if use_english_examples else "退出意图已处理"
+        )
+        exit_assistant_text = (
+            "Goodbye, talk to you next time~"
+            if use_english_examples
+            else "再见，下次再聊~"
+        )
+
+        music_user_text = "Play me a song" if use_english_examples else "放首歌"
+        music_tool_result = (
+            "Playing music for you" if use_english_examples else "正在为您播放音乐"
+        )
+        music_assistant_text = (
+            "Sure, I'll put one on for you~"
+            if use_english_examples
+            else "好嘞，给你安排上~"
+        )
+
+        story_user_text = (
+            "Tell me a story"
+            if use_english_examples
+            else "给我讲个故事吧"
+        )
+        story_assistant_text = (
+            "Sure. What kind are you in the mood for: fairy tale, adventure, or something funny? Pick one and I'll start."
+            if use_english_examples
+            else "好呀，你想听什么类型的呀？童话、冒险还是搞笑的？选一个我给你开讲~"
+        )
+        sky_user_text = (
+            "Do you know why the sky is blue"
+            if use_english_examples
+            else "你知道为什么天空是蓝色的吗"
+        )
+        sky_assistant_text = (
+            "The sky looks blue because when sunlight passes through the atmosphere, blue light with shorter wavelengths gets scattered more strongly by air molecules, so when we look up, blue is what we see most."
+            if use_english_examples
+            else "天空看起来是蓝色，是因为阳光穿过大气层的时候，蓝色光波长短，被空气分子散射得最厉害，所以我们抬头一看就是满眼蓝色啦。"
+        )
 
         if "handle_exit_intent" in tool_names:
             tc_id = "fewshot_exit_001"
-            self.dialogue.put(Message(role="user", content="拜拜", is_temporary=True))
+            self.dialogue.put(
+                Message(role="user", content=exit_user_text, is_temporary=True)
+            )
             self.dialogue.put(Message(
                 role="assistant",
                 tool_calls=[{
                     "id": tc_id,
-                    "function": {"arguments": '{"say_goodbye": "再见，下次再聊~"}', "name": "handle_exit_intent"},
+                    "function": {"arguments": exit_tool_args, "name": "handle_exit_intent"},
                     "type": "function", "index": 0,
                 }],
                 is_temporary=True,
             ))
             self.dialogue.put(Message(
                 role="tool", tool_call_id=tc_id,
-                content="退出意图已处理", is_temporary=True,
+                content=exit_tool_result, is_temporary=True,
             ))
             self.dialogue.put(Message(
-                role="assistant", content="再见，下次再聊~", is_temporary=True,
+                role="assistant", content=exit_assistant_text, is_temporary=True,
             ))
 
         if "play_music" in tool_names:
             tc_id = "fewshot_music_001"
-            self.dialogue.put(Message(role="user", content="放首歌", is_temporary=True))
+            self.dialogue.put(
+                Message(role="user", content=music_user_text, is_temporary=True)
+            )
             self.dialogue.put(Message(
                 role="assistant",
                 tool_calls=[{
@@ -600,30 +655,36 @@ class ConnectionHandler:
             ))
             self.dialogue.put(Message(
                 role="tool", tool_call_id=tc_id,
-                content="正在为您播放音乐", is_temporary=True,
+                content=music_tool_result, is_temporary=True,
             ))
             self.dialogue.put(Message(
-                role="assistant", content="好嘞，给你安排上~", is_temporary=True,
+                role="assistant", content=music_assistant_text, is_temporary=True,
             ))
 
         # 负向示例：用户请求普通对话内容时，直接回答，不调用任何工具
         # 帮助弱模型建立"该调才调、不该调不调"的判断能力
         # 注意：示例回复不能包含具体的创作内容（故事、诗歌等），
         # 否则弱模型会直接复述示例内容，而无法泛化出正确的行为模式
-        self.dialogue.put(Message(role="user", content="给我讲个故事吧", is_temporary=True))
+        self.dialogue.put(
+            Message(role="user", content=story_user_text, is_temporary=True)
+        )
         self.dialogue.put(Message(
             role="assistant",
-            content="好呀，你想听什么类型的呀？童话、冒险还是搞笑的？选一个我给你开讲~",
+            content=story_assistant_text,
             is_temporary=True,
         ))
-        self.dialogue.put(Message(role="user", content="你知道为什么天空是蓝色的吗", is_temporary=True))
+        self.dialogue.put(
+            Message(role="user", content=sky_user_text, is_temporary=True)
+        )
         self.dialogue.put(Message(
             role="assistant",
-            content="天空看起来是蓝色，是因为阳光穿过大气层的时候，蓝色光波长短，被空气分子散射得最厉害，所以我们抬头一看就是满眼蓝色啦。",
+            content=sky_assistant_text,
             is_temporary=True,
         ))
 
-        self.logger.bind(tag=TAG).debug("已注入工具调用 few-shot 示例")
+        self.logger.bind(tag=TAG).debug(
+            f"已注入工具调用 few-shot 示例，language={current_language or 'Chinese'}"
+        )
 
     def _init_report_threads(self):
         """初始化ASR和TTS上报线程"""
@@ -940,9 +1001,88 @@ class ConnectionHandler:
         )
         if enhanced_prompt:
             self.change_system_prompt(enhanced_prompt)
+            self._inject_tool_call_fewshot()
             self.logger.bind(tag=TAG).debug(
                 f"已按当前语言刷新系统提示词: {self.current_language}"
             )
+
+    def _get_reply_target_language(self) -> str | None:
+        """当前仅对中英文回复做强约束，其他语言保持原有行为。"""
+        current_language = getattr(self, "current_language", None)
+        if current_language in {"Chinese", "English"}:
+            return current_language
+        return None
+
+    def _build_reply_language_guard(self, target_language: str) -> str:
+        language_name = "中文" if target_language == "Chinese" else "English"
+        forbidden = "English" if target_language == "Chinese" else "中文"
+        return (
+            f"本轮用户使用的是{language_name}。"
+            f"你必须仅使用{language_name}回复，禁止输出{forbidden}。"
+            "专有名词、型号、命令、报错、歌曲名如必须保留原文，可以保留，但整体回复语言不得偏离上述要求。"
+        )
+
+    def _rewrite_response_to_target_language(
+        self, text: str, target_language: str
+    ) -> str:
+        system_prompt = (
+            "你是回复语言校正器。"
+            "任务：保持原意、语气、信息量、专有名词和操作步骤不变，"
+            "只把内容改写成目标语言。"
+            "不要解释，不要补充，不要总结，只输出改写后的最终文本。"
+        )
+        target_name = "中文" if target_language == "Chinese" else "English"
+        user_prompt = (
+            f"目标语言：{target_name}\n"
+            f"原始文本：{text}\n"
+            "请输出改写后的文本："
+        )
+        rewritten = self.llm.response_no_stream(system_prompt, user_prompt)
+        return rewritten.strip() if isinstance(rewritten, str) else text
+
+    def _ensure_reply_language(self, text: str) -> str:
+        target_language = self._get_reply_target_language()
+        if not target_language:
+            return text
+
+        normalized_text = (text or "").strip()
+        if not normalized_text:
+            return text
+
+        try:
+            detected_language = detect_language_with_llm(
+                self.llm, normalized_text, target_language
+            )
+            self.logger.bind(tag=TAG).info(
+                "回复语言检测结果: "
+                f"target={target_language}, detected={detected_language}, text={normalized_text[:120]!r}"
+            )
+            if detected_language == target_language:
+                return text
+
+            rewritten_text = self._rewrite_response_to_target_language(
+                normalized_text, target_language
+            )
+            if not rewritten_text:
+                return text
+
+            rewritten_detected_language = detect_language_with_llm(
+                self.llm, rewritten_text, target_language
+            )
+            self.logger.bind(tag=TAG).info(
+                "回复语言校正结果: "
+                f"target={target_language}, detected={rewritten_detected_language}, text={rewritten_text[:120]!r}"
+            )
+            if rewritten_detected_language == target_language:
+                return rewritten_text
+
+            self.logger.bind(tag=TAG).warning(
+                "回复语言校正后仍未达到目标语言，沿用校正结果继续发送"
+            )
+            return rewritten_text
+        except Exception as e:
+            self.logger.bind(tag=TAG).warning(f"回复语言校正失败，沿用原始文本: {e}")
+            return text
 
     def chat(self, query, depth=0):
         # 保存当前任务的sentence_id到局部变量，避免被新任务覆盖
@@ -1009,6 +1149,19 @@ class ConnectionHandler:
             llm_dialogue = self.dialogue.get_llm_dialogue_with_memory(
                 memory_str, self.config.get("voiceprint", {})
             )
+            target_language = self._get_reply_target_language()
+            if target_language:
+                guard_message = {
+                    "role": "system",
+                    "content": self._build_reply_language_guard(target_language),
+                }
+                insert_index = 0
+                while (
+                    insert_index < len(llm_dialogue)
+                    and llm_dialogue[insert_index].get("role") == "system"
+                ):
+                    insert_index += 1
+                llm_dialogue.insert(insert_index, guard_message)
             self.logger.bind(tag=TAG).debug(
                 "LLM完整输入dialogue: "
                 + json.dumps(llm_dialogue, ensure_ascii=False, default=str)
@@ -1077,18 +1230,6 @@ class ConnectionHandler:
                 if content is not None and len(content) > 0:
                     if not tool_call_flag:
                         response_message.append(content)
-                        if not (
-                            self.intent_type == "function_call"
-                            and functions is not None
-                        ):
-                            self.tts.tts_text_queue.put(
-                                TTSMessageDTO(
-                                    sentence_id=current_sentence_id,
-                                    sentence_type=SentenceType.MIDDLE,
-                                    content_type=ContentType.TEXT,
-                                    content_detail=content,
-                                )
-                            )
         except Exception as e:
             self.logger.bind(tag=TAG).error(f"LLM stream processing error: {e}")
             self.tts.tts_text_queue.put(
@@ -1202,15 +1343,15 @@ class ConnectionHandler:
         # 存储对话内容
         if len(response_message) > 0:
             text_buff = "".join(response_message)
-            if self.intent_type == "function_call" and functions is not None:
-                self.tts.tts_text_queue.put(
-                    TTSMessageDTO(
-                        sentence_id=current_sentence_id,
-                        sentence_type=SentenceType.MIDDLE,
-                        content_type=ContentType.TEXT,
-                        content_detail=text_buff,
-                    )
+            text_buff = self._ensure_reply_language(text_buff)
+            self.tts.tts_text_queue.put(
+                TTSMessageDTO(
+                    sentence_id=current_sentence_id,
+                    sentence_type=SentenceType.MIDDLE,
+                    content_type=ContentType.TEXT,
+                    content_detail=text_buff,
                 )
+            )
             self.tts.store_tts_text(current_sentence_id, text_buff)
             self.dialogue.put(Message(role="assistant", content=text_buff))
 
