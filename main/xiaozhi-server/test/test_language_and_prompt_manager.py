@@ -1,5 +1,4 @@
 import unittest
-from collections import deque
 from types import SimpleNamespace
 import sys
 import types
@@ -34,28 +33,32 @@ sys.modules["config.logger"] = fake_logger_module
 sys.modules["jinja2"] = fake_jinja2
 
 from core.utils.language_detector import update_session_language
+from core.utils.language import get_display_text
 from core.utils.prompt_manager import PromptManager
 from core.utils.textUtils import strip_markdown_for_display
 
 
 class UpdateSessionLanguageTest(unittest.TestCase):
-    def test_short_english_phrase_switches_session_language(self):
-        conn = SimpleNamespace(
-            current_language="Chinese", language_detect_history=deque(maxlen=3)
-        )
+    def test_detected_language_is_applied_directly(self):
+        conn = SimpleNamespace(current_language="Chinese")
 
         result = update_session_language(conn, "English", "hi maia")
 
         self.assertEqual(result, "English")
 
-    def test_single_latin_word_does_not_switch_language(self):
-        conn = SimpleNamespace(
-            current_language="Chinese", language_detect_history=deque(maxlen=3)
-        )
+    def test_short_text_detected_as_english_still_switches_language(self):
+        conn = SimpleNamespace(current_language="Chinese")
 
         result = update_session_language(conn, "English", "hello")
 
-        self.assertEqual(result, "Chinese")
+        self.assertEqual(result, "English")
+
+    def test_unknown_keeps_current_language(self):
+        conn = SimpleNamespace(current_language="English")
+
+        result = update_session_language(conn, "Unknown", "ok")
+
+        self.assertEqual(result, "English")
 
 
 class PromptManagerWeatherPrefetchTest(unittest.TestCase):
@@ -79,6 +82,18 @@ class TextUtilsTest(unittest.TestCase):
         result = strip_markdown_for_display(text)
 
         self.assertEqual(result, "你好，请看这里 和 code")
+
+
+class LanguageDisplayTextTest(unittest.TestCase):
+    def test_processing_display_text_in_english(self):
+        result = get_display_text("processing", "English")
+
+        self.assertEqual(result, "Processing")
+
+    def test_processing_display_text_falls_back_to_chinese(self):
+        result = get_display_text("processing", "UnknownLanguage")
+
+        self.assertEqual(result, "正在处理")
 
 
 if __name__ == "__main__":

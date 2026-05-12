@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import re
-from collections import deque
 
 from config.logger import setup_logging
 
@@ -35,9 +34,6 @@ SHORT_CONFIRMATION_WORDS = {
     "thanks",
     "thank you",
 }
-
-LATIN_WORD_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9_+-]*[.!?。！？,，;；:：]*$")
-LATIN_TEXT_PATTERN = re.compile(r"^[A-Za-z0-9\s_+\-'.!?,;:]+$")
 
 LANGUAGE_DETECT_SYSTEM_PROMPT = """你是语言识别器。
 任务：根据用户文本判断最适合用于回复和TTS播报的语言。
@@ -79,25 +75,6 @@ def _looks_too_short(text: str) -> bool:
     if compact.lower() in SHORT_CONFIRMATION_WORDS:
         return True
     return False
-
-
-def _is_single_latin_word(text: str) -> bool:
-    compact = re.sub(r"\s+", " ", text).strip()
-    return bool(LATIN_WORD_PATTERN.fullmatch(compact))
-
-
-def _is_clear_short_english_phrase(text: str) -> bool:
-    compact = re.sub(r"\s+", " ", text).strip()
-    if not compact:
-        return False
-    if len(compact) > 12:
-        return False
-    if not LATIN_TEXT_PATTERN.fullmatch(compact):
-        return False
-    words = [part for part in compact.split(" ") if part]
-    return len(words) >= 2
-
-
 def _normalize_detected_language(language: str | None) -> str | None:
     if not language:
         return None
@@ -171,12 +148,9 @@ def detect_language_with_llm(llm, text: str, current_language: str | None = None
 
 
 def update_session_language(conn, detected_language: str, text: str) -> str:
-    """结合短句保护和简单平滑策略，更新会话语言。"""
+    """根据语言检测结果更新会话语言。"""
     current_language = getattr(conn, "current_language", None) or "Chinese"
     normalized_text = _normalize_text(text)
-
-    if not hasattr(conn, "language_detect_history") or conn.language_detect_history is None:
-        conn.language_detect_history = deque(maxlen=3)
 
     if detected_language == "Unknown":
         logger.bind(tag=TAG).info(
@@ -184,50 +158,13 @@ def update_session_language(conn, detected_language: str, text: str) -> str:
         )
         return current_language
 
-    if _looks_too_short(normalized_text):
-        logger.bind(tag=TAG).info(
-            f"输入过短，不触发语言切换: current={current_language}, detected={detected_language}, text={normalized_text[:80]!r}"
-        )
-        return current_language
-
-    if detected_language != current_language and _is_single_latin_word(normalized_text):
-        logger.bind(tag=TAG).info(
-            f"单个拉丁词不触发语言切换: current={current_language}, detected={detected_language}, text={normalized_text[:80]!r}"
-        )
-        return current_language
-
     if current_language == detected_language:
-        conn.language_detect_history.clear()
         logger.bind(tag=TAG).info(
             f"语言检测结果与当前会话语言一致: current={current_language}, text={normalized_text[:80]!r}"
         )
         return current_language
 
-    conn.language_detect_history.append(detected_language)
-    should_switch = False
-
-    if len(normalized_text) >= 8:
-        should_switch = True
-
-    if (
-        detected_language == "English"
-        and _is_clear_short_english_phrase(normalized_text)
-    ):
-        should_switch = True
-
-    if len(conn.language_detect_history) >= 2:
-        recent = list(conn.language_detect_history)[-2:]
-        if recent[0] == recent[1] == detected_language:
-            should_switch = True
-
-    if should_switch:
-        logger.bind(tag=TAG).info(
-            f"切换会话语言: {current_language} -> {detected_language}, text={normalized_text[:80]!r}"
-        )
-        conn.language_detect_history.clear()
-        return detected_language
-
-    logger.bind(tag=TAG).debug(
-        f"暂不切换会话语言: current={current_language}, detected={detected_language}, history={list(conn.language_detect_history)}, text={normalized_text[:80]!r}"
+    logger.bind(tag=TAG).info(
+        f"切换会话语言: {current_language} -> {detected_language}, text={normalized_text[:80]!r}"
     )
-    return current_language
+    return detected_language
