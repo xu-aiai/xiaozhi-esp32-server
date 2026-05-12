@@ -105,6 +105,7 @@ class ConnectionHandler:
         self.loop = None  # 在 handle_connection 中获取运行中的事件循环
         self.stop_event = threading.Event()
         self.executor = ThreadPoolExecutor(max_workers=5)
+        self.background_initialize_task = None
 
         # 添加上报线程池
         self.report_queue = queue.Queue()
@@ -229,7 +230,9 @@ class ConnectionHandler:
             self.logger.bind(tag=TAG).info(f"配置输出音频采样率为: {self.sample_rate}")
 
             # 在后台初始化配置和组件（完全不阻塞主循环）
-            asyncio.create_task(self._background_initialize())
+            self.background_initialize_task = asyncio.create_task(
+                self._background_initialize()
+            )
 
             try:
                 async for message in self.websocket:
@@ -749,8 +752,17 @@ class ConnectionHandler:
         try:
             # 异步获取差异化配置
             await self._initialize_private_config_async()
+            if self.stop_event.is_set():
+                self.logger.bind(tag=TAG).debug("连接已关闭，跳过后台组件初始化")
+                return
             # 在线程池中初始化组件
-            self.executor.submit(self._initialize_components)
+            executor = self.executor
+            if executor is None:
+                self.logger.bind(tag=TAG).debug("线程池已释放，跳过后台组件初始化")
+                return
+            executor.submit(self._initialize_components)
+        except asyncio.CancelledError:
+            self.logger.bind(tag=TAG).debug("后台初始化任务已取消")
         except Exception as e:
             self.logger.bind(tag=TAG).error(f"后台初始化失败: {e}")
 
@@ -784,6 +796,10 @@ class ConnectionHandler:
             self.need_bind = True
             self.logger.bind(tag=TAG).error(f"异步获取差异化配置失败: {e}")
             private_config = {}
+
+        if self.stop_event.is_set():
+            self.logger.bind(tag=TAG).debug("连接已关闭，跳过差异化配置后续初始化")
+            return
 
         init_llm, init_tts, init_memory, init_intent = (
             False,
@@ -882,6 +898,9 @@ class ConnectionHandler:
         except Exception as e:
             self.logger.bind(tag=TAG).error(f"初始化组件失败: {e}")
             modules = {}
+        if self.stop_event.is_set():
+            self.logger.bind(tag=TAG).debug("连接已关闭，丢弃已初始化组件")
+            return
         if modules.get("tts", None) is not None:
             self.tts = modules["tts"]
         if modules.get("vad", None) is not None:
@@ -1714,6 +1733,10 @@ class ConnectionHandler:
     async def close(self, ws=None):
         """资源清理方法"""
         try:
+            # 尽早标记关闭，避免后台初始化在连接释放后继续提交任务。
+            if self.stop_event:
+                self.stop_event.set()
+
             # 清理 VAD 连接资源
             if (
                     hasattr(self, "vad")
@@ -1735,6 +1758,20 @@ class ConnectionHandler:
                     pass
                 self.timeout_task = None
 
+            background_task = self.background_initialize_task
+            current_task = asyncio.current_task()
+            if (
+                    background_task
+                    and background_task is not current_task
+                    and not background_task.done()
+            ):
+                background_task.cancel()
+                try:
+                    await background_task
+                except asyncio.CancelledError:
+                    pass
+                self.background_initialize_task = None
+
             # 清理工具处理器资源
             if hasattr(self, "func_handler") and self.func_handler:
                 try:
@@ -1743,10 +1780,6 @@ class ConnectionHandler:
                     self.logger.bind(tag=TAG).error(
                         f"清理工具处理器时出错: {cleanup_error}"
                     )
-
-            # 触发停止事件
-            if self.stop_event:
-                self.stop_event.set()
 
             # 清空任务队列
             self.clear_queues()
