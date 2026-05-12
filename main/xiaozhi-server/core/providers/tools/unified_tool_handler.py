@@ -15,6 +15,7 @@ from .device_mcp import DeviceMCPExecutor
 from .mcp_endpoint import MCPEndpointExecutor
 from core.handle.sendAudioHandle import send_display_message
 from core.utils.language import (
+    get_conn_display_text,
     get_conn_downstream_language,
     get_conn_plugin_language,
 )
@@ -234,7 +235,10 @@ class UnifiedToolHandler:
 
             # 发送通用状态到设备，不暴露内部工具/知识库名称
             try:
-                await send_display_message(self.conn, "正在处理")
+                await send_display_message(
+                    self.conn,
+                    get_conn_display_text(self.conn, "processing"),
+                )
             except Exception as e:
                 self.logger.warning(f"发送工具调用显示消息失败: {e}")
 

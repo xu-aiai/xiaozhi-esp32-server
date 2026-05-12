@@ -2,6 +2,7 @@ import json
 import time
 import asyncio
 from typing import TYPE_CHECKING
+from core.utils.language import get_conn_display_text
 
 if TYPE_CHECKING:
     from core.connection import ConnectionHandler
@@ -268,6 +269,8 @@ async def send_tts_message(conn: "ConnectionHandler", state, text=None):
     if text is None and state == "sentence_start":
         return
     message = {"type": "tts", "state": state, "session_id": conn.session_id}
+    if text is None and state == "start":
+        message["text"] = get_conn_display_text(conn, "processing")
     if text is not None:
         message["text"] = textUtils.strip_markdown_for_display(
             textUtils.check_emoji(text)

@@ -34,7 +34,11 @@ def handle_exit_intent(conn: "ConnectionHandler", say_goodbye: str | None = None
     # 处理退出意图
     try:
         if say_goodbye is None:
-            say_goodbye = "再见，祝您生活愉快！"
+            current_language = getattr(conn, "current_language", None)
+            if current_language == "English":
+                say_goodbye = "Goodbye, and have a wonderful day!"
+            else:
+                say_goodbye = "再见，祝您生活愉快！"
         if not conn.close_after_chat:
             conn.close_after_chat = True
         logger.bind(tag=TAG).info(f"退出意图已处理:{say_goodbye}")

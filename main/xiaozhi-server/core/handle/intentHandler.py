@@ -221,6 +221,10 @@ def speak_txt(conn: "ConnectionHandler", text):
     text = sanitize_tool_response_for_speech(conn, text)
     if not text:
         return
+    if hasattr(conn, "_ensure_reply_language"):
+        text = conn._ensure_reply_language(text)
+        if not text:
+            return
     # 记录文本到 sentence_id 映射
     conn.tts.store_tts_text(conn.sentence_id, text)
 

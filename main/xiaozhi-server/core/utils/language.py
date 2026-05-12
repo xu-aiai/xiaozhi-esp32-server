@@ -108,6 +108,22 @@ PROMPT_LANGUAGE_ALIASES = {
     "Spanish": "西班牙文",
 }
 
+DISPLAY_TEXT_I18N = {
+    "processing": {
+        "Chinese": "正在处理",
+        "English": "Processing",
+        "Japanese": "処理中",
+        "Korean": "처리 중",
+        "French": "Traitement en cours",
+        "German": "Wird verarbeitet",
+        "Russian": "Обработка",
+        "Portuguese": "Processando",
+        "Spanish": "Procesando",
+        "Italian": "Elaborazione in corso",
+        "Arabic": "جارٍ المعالجة",
+    }
+}
+
 
 def normalize_tts_language(language, default="Chinese"):
     """将管理端展示值或常见别名转换为上游 TTS 接口枚举。"""
@@ -184,3 +200,19 @@ def get_conn_downstream_language(conn, default="zh-CN"):
     """从连接对象读取当前会话语言，并映射为下游受支持的 language。"""
     session_language = getattr(conn, "current_language", None) if conn else None
     return get_supported_downstream_language(session_language, default=default)
+
+
+def get_display_text(key: str, language, default="正在处理"):
+    """将固定展示文案按当前会话语言做国际化映射。"""
+    translations = DISPLAY_TEXT_I18N.get(key, {})
+    if not translations:
+        return default
+
+    normalized = normalize_tts_language(language, default="Chinese")
+    return translations.get(normalized, translations.get("Chinese", default))
+
+
+def get_conn_display_text(conn, key: str, default="正在处理"):
+    """从连接对象读取当前会话语言，并返回对应的国际化展示文案。"""
+    session_language = getattr(conn, "current_language", None) if conn else None
+    return get_display_text(key, session_language, default=default)

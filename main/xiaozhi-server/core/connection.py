@@ -1648,15 +1648,18 @@ class ConnectionHandler:
                     )
                 else:
                     speech_text = sanitize_tool_response_for_speech(self, text)
+                    speech_text = self._ensure_reply_language(speech_text)
                     if speech_text:
                         self.tts.tts_one_sentence(
                             self, ContentType.TEXT, content_detail=speech_text
                         )
                         self.tts.store_tts_text(self.sentence_id, speech_text)
+                assistant_text = sanitize_tool_response_for_speech(self, text)
+                assistant_text = self._ensure_reply_language(assistant_text)
                 self.dialogue.put(
                     Message(
                         role="assistant",
-                        content=sanitize_tool_response_for_speech(self, text),
+                        content=assistant_text,
                     )
                 )
             elif result.action == Action.REQLLM:
