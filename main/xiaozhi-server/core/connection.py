@@ -1075,39 +1075,71 @@ class ConnectionHandler:
         )
         return system_prompt, user_prompt
 
-    def _decide_reply_stream_language(self, text: str, target_language: str | None):
-        """用本地规则判断首个可判定片段是否符合当前回复语言。"""
-        if target_language not in {"Chinese", "English"}:
-            return "matched"
-
+    def _inspect_reply_stream_language(
+        self, text: str, target_language: str | None
+    ) -> dict:
+        """分析回复片段的语言信号，返回规则判定结果和统计信息。"""
         normalized_text = (text or "").strip()
+        result = {
+            "target_language": target_language,
+            "decision": "unknown",
+            "detected_language": "Unknown",
+            "normalized_text": normalized_text,
+            "signal_text": "",
+            "signal_length": 0,
+            "chinese_chars": 0,
+            "latin_chars": 0,
+        }
+
+        if target_language not in {"Chinese", "English"}:
+            result["decision"] = "matched"
+            result["detected_language"] = target_language or "Unknown"
+            return result
+
         if not normalized_text:
-            return "unknown"
+            return result
 
         # 过滤 Markdown 和标点噪声，避免用空白/项目符号/半个 token 做判断。
         signal_text = re.sub(
             r"[\s`*_#>\-\[\](){},.:;!?~，。！？；：、]+", "", normalized_text
         )
-        if len(signal_text) < 8 and not re.search(
-            r"[\u4e00-\u9fff]{2,}", signal_text
-        ):
-            return "unknown"
-
         chinese_chars = len(re.findall(r"[\u4e00-\u9fff]", signal_text))
         latin_chars = len(re.findall(r"[A-Za-z]", signal_text))
 
+        result.update(
+            {
+                "signal_text": signal_text,
+                "signal_length": len(signal_text),
+                "chinese_chars": chinese_chars,
+                "latin_chars": latin_chars,
+            }
+        )
+
+        if len(signal_text) < 8 and not re.search(
+            r"[\u4e00-\u9fff]{2,}", signal_text
+        ):
+            return result
+
         if target_language == "Chinese":
             if chinese_chars >= 2:
-                return "matched"
-            if latin_chars >= 12 and chinese_chars == 0:
-                return "mismatched"
-            return "unknown"
+                result["decision"] = "matched"
+                result["detected_language"] = "Chinese"
+            elif latin_chars >= 12 and chinese_chars == 0:
+                result["decision"] = "mismatched"
+                result["detected_language"] = "English"
+            return result
 
         if latin_chars >= 8 and chinese_chars == 0:
-            return "matched"
-        if chinese_chars >= 2 and latin_chars < 8:
-            return "mismatched"
-        return "unknown"
+            result["decision"] = "matched"
+            result["detected_language"] = "English"
+        elif chinese_chars >= 2 and latin_chars < 8:
+            result["decision"] = "mismatched"
+            result["detected_language"] = "Chinese"
+        return result
+
+    def _decide_reply_stream_language(self, text: str, target_language: str | None):
+        """用本地规则判断首个可判定片段是否符合当前回复语言。"""
+        return self._inspect_reply_stream_language(text, target_language)["decision"]
 
     def _enqueue_tts_text_chunk(self, sentence_id: str, text: str):
         if not text:
@@ -1362,14 +1394,21 @@ class ConnectionHandler:
                         elif reply_stream_state == "pending":
                             reply_pending_chunks.append(content)
                             probe_text = "".join(reply_pending_chunks)
-                            decision = self._decide_reply_stream_language(
+                            language_inspection = self._inspect_reply_stream_language(
                                 probe_text, target_language
                             )
+                            decision = language_inspection["decision"]
                             if decision == "matched":
                                 reply_stream_state = "direct"
                                 self.logger.bind(tag=TAG).info(
                                     "回复首段语言规则检测通过，开始流式写入TTS: "
-                                    f"target={target_language}, text={probe_text[:120]!r}"
+                                    f"target={target_language}, "
+                                    f"detected={language_inspection['detected_language']}, "
+                                    f"decision={decision}, "
+                                    f"signal_length={language_inspection['signal_length']}, "
+                                    f"chinese_chars={language_inspection['chinese_chars']}, "
+                                    f"latin_chars={language_inspection['latin_chars']}, "
+                                    f"text={probe_text[:120]!r}"
                                 )
                                 for pending_chunk in reply_pending_chunks:
                                     self._enqueue_tts_text_chunk(
@@ -1380,7 +1419,13 @@ class ConnectionHandler:
                                 reply_stream_state = "translate"
                                 self.logger.bind(tag=TAG).info(
                                     "回复首段语言规则检测不匹配，等待完整回复后流式校正: "
-                                    f"target={target_language}, text={probe_text[:120]!r}"
+                                    f"target={target_language}, "
+                                    f"detected={language_inspection['detected_language']}, "
+                                    f"decision={decision}, "
+                                    f"signal_length={language_inspection['signal_length']}, "
+                                    f"chinese_chars={language_inspection['chinese_chars']}, "
+                                    f"latin_chars={language_inspection['latin_chars']}, "
+                                    f"text={probe_text[:120]!r}"
                                 )
         except Exception as e:
             self.logger.bind(tag=TAG).error(f"LLM stream processing error: {e}")
@@ -1511,20 +1556,33 @@ class ConnectionHandler:
             text_buff = "".join(response_message)
             if target_language:
                 if reply_stream_state == "pending":
-                    decision = self._decide_reply_stream_language(
+                    language_inspection = self._inspect_reply_stream_language(
                         text_buff, target_language
                     )
+                    decision = language_inspection["decision"]
                     if decision == "mismatched":
                         reply_stream_state = "translate"
                         self.logger.bind(tag=TAG).info(
                             "完整回复语言规则检测不匹配，开始流式校正: "
-                            f"target={target_language}, text={text_buff[:120]!r}"
+                            f"target={target_language}, "
+                            f"detected={language_inspection['detected_language']}, "
+                            f"decision={decision}, "
+                            f"signal_length={language_inspection['signal_length']}, "
+                            f"chinese_chars={language_inspection['chinese_chars']}, "
+                            f"latin_chars={language_inspection['latin_chars']}, "
+                            f"text={text_buff[:120]!r}"
                         )
                     else:
                         reply_stream_state = "direct"
                         self.logger.bind(tag=TAG).info(
                             "完整回复语言规则检测通过或无法判定，直接写入TTS: "
-                            f"target={target_language}, decision={decision}, text={text_buff[:120]!r}"
+                            f"target={target_language}, "
+                            f"detected={language_inspection['detected_language']}, "
+                            f"decision={decision}, "
+                            f"signal_length={language_inspection['signal_length']}, "
+                            f"chinese_chars={language_inspection['chinese_chars']}, "
+                            f"latin_chars={language_inspection['latin_chars']}, "
+                            f"text={text_buff[:120]!r}"
                         )
                         for pending_chunk in reply_pending_chunks:
                             self._enqueue_tts_text_chunk(

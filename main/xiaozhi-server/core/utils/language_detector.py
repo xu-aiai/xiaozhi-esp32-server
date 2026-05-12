@@ -75,6 +75,34 @@ def _looks_too_short(text: str) -> bool:
     if compact.lower() in SHORT_CONFIRMATION_WORDS:
         return True
     return False
+
+
+def _detect_language_by_rules(text: str) -> str:
+    """当 LLM 未给出可靠结果时，仅用本地规则兜底识别中英文。"""
+    normalized_text = _normalize_text(text)
+    if not normalized_text:
+        return "Unknown"
+
+    signal_text = re.sub(
+        r"[\s`*_#>\-\[\](){},.:;!?~，。！？；：、】【…]+", "", normalized_text
+    )
+    if not signal_text:
+        return "Unknown"
+
+    chinese_chars = len(re.findall(r"[\u4e00-\u9fff]", signal_text))
+    latin_chars = len(re.findall(r"[A-Za-z]", signal_text))
+
+    if chinese_chars >= 2:
+        return "Chinese"
+    if latin_chars >= 8 and chinese_chars == 0:
+        return "English"
+    if chinese_chars >= 1 and latin_chars == 0 and len(signal_text) <= 4:
+        return "Chinese"
+    if latin_chars >= 3 and chinese_chars == 0 and len(signal_text) <= 8:
+        return "English"
+    return "Unknown"
+
+
 def _normalize_detected_language(language: str | None) -> str | None:
     if not language:
         return None
@@ -97,6 +125,12 @@ def detect_language_with_llm(llm, text: str, current_language: str | None = None
         return current_language or "Chinese"
 
     if _looks_too_short(normalized_text):
+        rule_detected = _detect_language_by_rules(normalized_text)
+        if rule_detected != "Unknown":
+            logger.bind(tag=TAG).info(
+                f"语言检测跳过大模型并命中规则: text={normalized_text[:80]!r}, detected={rule_detected}"
+            )
+            return rule_detected
         logger.bind(tag=TAG).debug(
             f"语言检测跳过：输入过短，text={normalized_text[:80]!r}, current={current_language or 'None'}"
         )
@@ -124,9 +158,21 @@ def detect_language_with_llm(llm, text: str, current_language: str | None = None
                 user_prompt,
             )
         except Exception as exc:
+            rule_detected = _detect_language_by_rules(normalized_text)
+            if rule_detected != "Unknown":
+                logger.bind(tag=TAG).warning(
+                    f"语言检测调用失败，已回退规则检测: detected={rule_detected}, error={exc}"
+                )
+                return rule_detected
             logger.bind(tag=TAG).warning(f"语言检测调用失败，回退当前语言: {exc}")
             return current_language or "Unknown"
     except Exception as exc:
+        rule_detected = _detect_language_by_rules(normalized_text)
+        if rule_detected != "Unknown":
+            logger.bind(tag=TAG).warning(
+                f"语言检测调用失败，已回退规则检测: detected={rule_detected}, error={exc}"
+            )
+            return rule_detected
         logger.bind(tag=TAG).warning(f"语言检测调用失败，回退当前语言: {exc}")
         return current_language or "Unknown"
 
@@ -139,8 +185,20 @@ def detect_language_with_llm(llm, text: str, current_language: str | None = None
 
     result_text = _normalize_text(result)
     if result_text == "Unknown":
+        rule_detected = _detect_language_by_rules(normalized_text)
+        if rule_detected != "Unknown":
+            logger.bind(tag=TAG).info(
+                f"语言检测返回Unknown，已回退规则检测: text={normalized_text[:80]!r}, detected={rule_detected}"
+            )
+            return rule_detected
         return "Unknown"
 
+    rule_detected = _detect_language_by_rules(normalized_text)
+    if rule_detected != "Unknown":
+        logger.bind(tag=TAG).warning(
+            f"语言检测返回无效值，已回退规则检测: raw={result_text!r}, detected={rule_detected}"
+        )
+        return rule_detected
     logger.bind(tag=TAG).warning(
         f"语言检测返回无效值，回退当前语言: raw={result_text!r}"
     )
