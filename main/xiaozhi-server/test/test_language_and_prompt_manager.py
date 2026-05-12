@@ -33,7 +33,7 @@ sys.modules["config.logger"] = fake_logger_module
 sys.modules["jinja2"] = fake_jinja2
 
 from core.utils.language_detector import update_session_language
-from core.utils.language import get_display_text
+from core.utils.language import get_display_text, get_end_prompt_text
 from core.utils.prompt_manager import PromptManager
 from core.utils.textUtils import strip_markdown_for_display
 
@@ -94,6 +94,18 @@ class LanguageDisplayTextTest(unittest.TestCase):
         result = get_display_text("processing", "UnknownLanguage")
 
         self.assertEqual(result, "正在处理")
+
+
+class EndPromptTextTest(unittest.TestCase):
+    def test_end_prompt_uses_configured_chinese_text(self):
+        result = get_end_prompt_text("Chinese", "这是自定义中文结束提示")
+
+        self.assertEqual(result, "这是自定义中文结束提示")
+
+    def test_end_prompt_uses_english_i18n_text(self):
+        result = get_end_prompt_text("English", "这是自定义中文结束提示")
+
+        self.assertIn("Time flies so fast", result)
 
 
 if __name__ == "__main__":

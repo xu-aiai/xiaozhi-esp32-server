@@ -12,8 +12,9 @@ from core.utils.language_detector import (
     detect_language_with_llm,
     update_session_language,
 )
+from core.utils.language import get_end_prompt_text
 from core.utils.output_counter import check_device_output_limit
-from core.handle.sendAudioHandle import send_stt_message, SentenceType
+from core.handle.sendAudioHandle import send_stt_message, send_tts_message, SentenceType
 
 TAG = __name__
 
@@ -40,7 +41,9 @@ async def resume_vad_detection(conn: "ConnectionHandler"):
     conn.just_woken_up = False
 
 
-async def startToChat(conn: "ConnectionHandler", text):
+async def startToChat(
+    conn: "ConnectionHandler", text, send_stt_to_client: bool = True
+):
     # 检查输入是否是JSON格式（包含说话人信息）
     speaker_name = None
     language_tag = None
@@ -116,7 +119,10 @@ async def startToChat(conn: "ConnectionHandler", text):
         return
 
     # 意图未被处理，继续常规聊天流程，使用实际文本内容
-    await send_stt_message(conn, actual_text)
+    if send_stt_to_client:
+        await send_stt_message(conn, actual_text)
+    else:
+        await send_tts_message(conn, "start")
 
     # 准备开始新会话
     conn.client_abort = False
@@ -145,10 +151,11 @@ async def no_voice_close_connect(conn: "ConnectionHandler", have_voice):
                 conn.logger.bind(tag=TAG).info("结束对话，无需发送结束提示语")
                 await conn.close()
                 return
-            prompt = end_prompt.get("prompt")
-            if not prompt:
-                prompt = "请你以```时间过得真快```未来头，用富有感情、依依不舍的话来结束这场对话吧。！"
-            await startToChat(conn, prompt)
+            prompt = get_end_prompt_text(
+                getattr(conn, "current_language", None),
+                end_prompt.get("prompt"),
+            )
+            await startToChat(conn, prompt, send_stt_to_client=False)
 
 
 async def max_out_size(conn: "ConnectionHandler"):

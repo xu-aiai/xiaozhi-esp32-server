@@ -124,6 +124,11 @@ DISPLAY_TEXT_I18N = {
     }
 }
 
+END_PROMPT_I18N = {
+    "Chinese": '请你以"时间过得真快"为开头，用富有感情、依依不舍的话来结束这场对话吧！',
+    "English": 'Please begin with "Time flies so fast" and end this conversation in a warm, emotional, and reluctant-to-say-goodbye tone.',
+}
+
 
 def normalize_tts_language(language, default="Chinese"):
     """将管理端展示值或常见别名转换为上游 TTS 接口枚举。"""
@@ -216,3 +221,23 @@ def get_conn_display_text(conn, key: str, default="正在处理"):
     """从连接对象读取当前会话语言，并返回对应的国际化展示文案。"""
     session_language = getattr(conn, "current_language", None) if conn else None
     return get_display_text(key, session_language, default=default)
+
+
+def get_end_prompt_text(language, configured_prompt=None):
+    """按当前会话语言返回结束提示词。"""
+    normalized = normalize_tts_language(language, default="Chinese")
+
+    if isinstance(configured_prompt, dict):
+        localized = (
+            configured_prompt.get(normalized)
+            or configured_prompt.get("default")
+            or configured_prompt.get("Chinese")
+        )
+        if localized:
+            return str(localized).strip()
+
+    configured_text = str(configured_prompt).strip() if configured_prompt else ""
+    if normalized == "Chinese" and configured_text:
+        return configured_text
+
+    return END_PROMPT_I18N.get(normalized, END_PROMPT_I18N["Chinese"])
