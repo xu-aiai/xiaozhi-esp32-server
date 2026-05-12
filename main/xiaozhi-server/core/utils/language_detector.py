@@ -37,6 +37,7 @@ SHORT_CONFIRMATION_WORDS = {
 }
 
 LATIN_WORD_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9_+-]*[.!?。！？,，;；:：]*$")
+LATIN_TEXT_PATTERN = re.compile(r"^[A-Za-z0-9\s_+\-'.!?,;:]+$")
 
 LANGUAGE_DETECT_SYSTEM_PROMPT = """你是语言识别器。
 任务：根据用户文本判断最适合用于回复和TTS播报的语言。
@@ -83,6 +84,18 @@ def _looks_too_short(text: str) -> bool:
 def _is_single_latin_word(text: str) -> bool:
     compact = re.sub(r"\s+", " ", text).strip()
     return bool(LATIN_WORD_PATTERN.fullmatch(compact))
+
+
+def _is_clear_short_english_phrase(text: str) -> bool:
+    compact = re.sub(r"\s+", " ", text).strip()
+    if not compact:
+        return False
+    if len(compact) > 12:
+        return False
+    if not LATIN_TEXT_PATTERN.fullmatch(compact):
+        return False
+    words = [part for part in compact.split(" ") if part]
+    return len(words) >= 2
 
 
 def _normalize_detected_language(language: str | None) -> str | None:
@@ -194,6 +207,12 @@ def update_session_language(conn, detected_language: str, text: str) -> str:
     should_switch = False
 
     if len(normalized_text) >= 8:
+        should_switch = True
+
+    if (
+        detected_language == "English"
+        and _is_clear_short_english_phrase(normalized_text)
+    ):
         should_switch = True
 
     if len(conn.language_detect_history) >= 2:

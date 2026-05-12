@@ -165,6 +165,11 @@ class PromptManager:
     def _get_weather_info(self, conn: "ConnectionHandler", location: str) -> str:
         """获取天气信息"""
         try:
+            weather_config = conn.config.get("plugins", {}).get("get_weather")
+            if not weather_config or not weather_config.get("api_key"):
+                self.logger.bind(tag=TAG).debug("未配置天气插件，跳过天气信息预取")
+                return ""
+
             # 先从缓存获取
             cached_weather = self.cache_manager.get(self.CacheType.WEATHER, location)
             if cached_weather is not None:
