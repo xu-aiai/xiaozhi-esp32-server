@@ -251,8 +251,10 @@ class LLMProvider(LLMProviderBase):
 
         think_filter = ThinkContentFilter()
         complete_output = []
+        chunk_count = 0
         try:            
             for chunk in responses:
+                chunk_count += 1
                 _log_json("OpenAI LLM完整原始输出chunk", chunk)
                 try:
                     delta = chunk.choices[0].delta if getattr(chunk, "choices", None) else None
@@ -271,7 +273,8 @@ class LLMProvider(LLMProviderBase):
         finally:
             logger.bind(tag=TAG).info(
                 "OpenAI LLM流式完整出参: "
-                f"session_id={session_id}, text={_truncate_for_log(''.join(complete_output))}"
+                f"session_id={session_id}, chunk_count={chunk_count}, "
+                f"text={_truncate_for_log(''.join(complete_output))}"
             )
             responses.close()
 
@@ -375,8 +378,10 @@ class LLMProvider(LLMProviderBase):
         think_filter = ThinkContentFilter()
         complete_output = []
         complete_tool_calls = []
+        chunk_count = 0
         try:
             for chunk in stream:
+                chunk_count += 1
                 _log_json("OpenAI LLM完整原始输出chunk", chunk)
                 if getattr(chunk, "choices", None):
                     delta = chunk.choices[0].delta
@@ -405,7 +410,8 @@ class LLMProvider(LLMProviderBase):
         finally:
             logger.bind(tag=TAG).info(
                 "OpenAI LLM流式完整出参: "
-                f"session_id={session_id}, text={_truncate_for_log(''.join(complete_output))}, "
+                f"session_id={session_id}, chunk_count={chunk_count}, "
+                f"text={_truncate_for_log(''.join(complete_output))}, "
                 f"tool_calls={json.dumps(_to_loggable(complete_tool_calls), ensure_ascii=False, default=str)}"
             )
             stream.close()

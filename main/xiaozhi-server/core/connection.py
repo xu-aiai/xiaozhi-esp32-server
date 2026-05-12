@@ -1446,6 +1446,15 @@ class ConnectionHandler:
                     )
                 )
             return
+        finally:
+            close_method = getattr(llm_responses, "close", None)
+            if callable(close_method):
+                try:
+                    close_method()
+                except Exception as close_error:
+                    self.logger.bind(tag=TAG).debug(
+                        f"关闭 LLM 流式响应时忽略异常: {close_error}"
+                    )
         # 处理function call
         if tool_call_flag:
             bHasError = False
