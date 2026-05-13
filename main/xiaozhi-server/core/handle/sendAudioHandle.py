@@ -23,7 +23,24 @@ async def sendAudioMessage(conn: "ConnectionHandler", sentenceType, audios, text
     if sentence_id is not None and sentence_id != conn.sentence_id:
         return
 
-    if conn.tts.tts_audio_first_sentence:
+    has_audio_payload = isinstance(audios, bytes) and len(audios) > 0
+    tts_first_packet_state = getattr(conn, "tts_first_packet_state", None)
+    if (
+        has_audio_payload
+        and isinstance(tts_first_packet_state, dict)
+        and not tts_first_packet_state.get("logged")
+        and sentence_id is not None
+        and sentence_id == tts_first_packet_state.get("sentence_id")
+    ):
+        elapsed_ms = int(
+            (time.perf_counter() - tts_first_packet_state["start_time"]) * 1000
+        )
+        conn.logger.bind(tag=TAG).info(
+            f"TTS首token: session_id={conn.session_id}, sentence_id={sentence_id}, elapsed_ms={elapsed_ms}, text={text!r}"
+        )
+        tts_first_packet_state["logged"] = True
+
+    if conn.tts.tts_audio_first_sentence and has_audio_payload:
         conn.logger.bind(tag=TAG).info(f"发送第一段语音: {text}")
         conn.tts.tts_audio_first_sentence = False
 

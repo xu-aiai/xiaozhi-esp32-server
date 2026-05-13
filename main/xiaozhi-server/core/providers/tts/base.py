@@ -397,7 +397,7 @@ class TTSProviderBase(ABC):
                         sentence_type, audio_datas, text, sentence_id = item
                     else:
                         sentence_type, audio_datas, text = item
-                        sentence_id = None
+                        sentence_id = getattr(self, "current_sentence_id", None) or getattr(self.conn, "sentence_id", None)
                 except queue.Empty:
                     if self.conn.stop_event.is_set():
                         break

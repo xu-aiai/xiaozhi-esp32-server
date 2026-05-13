@@ -389,19 +389,192 @@ ASR 处理模型分两类：
 4. 将回复补入对话历史
 5. 后台异步刷新缓存音频
 
-### 10.4 传统意图识别
+### 10.4 `intent_llm` 前置意图识别模式
 
-传统意图识别可能返回 `function_call` 结构。
+`intent_llm` 是一个“前置分流器”。
 
-结果处理分支包括：
+它的核心特点不是“是否使用大模型”，而是：
 
-- `continue_chat`
-  - 返回 `False`，继续走普通聊天
-- `result_for_context`
-  - 基于上下文生成结果并直接播报
-- 其他函数调用
-  - 直接调用统一工具系统
-  - 再根据工具返回的 `Action` 决定是否继续 LLM
+- 主聊天 `LLM` 开始正式回复前，会先额外调用一次“意图识别 `LLM`”
+- 这次调用不负责自然语言回答，只负责判断“是否应该触发某个工具”
+- 只有当前置意图识别返回 `continue_chat` 时，才会进入普通聊天主流程
+
+换句话说，`intent_llm` 的执行顺序是：
+
+1. 用户文本进入 `handle_user_intent()`
+2. `handle_user_intent()` 调用 `conn.intent.detect_intent(...)`
+3. `IntentProvider.detect_intent()` 组装提示词和工具列表
+4. 通过 `self.llm.response_no_stream(system_prompt, user_prompt)` 发起一次非流式 `LLM` 请求
+5. `LLM` 返回一个严格 JSON
+6. 服务端解析 JSON，决定：
+   - 继续普通聊天
+   - 直接回答上下文问题
+   - 直接执行工具
+
+#### 10.4.1 调用入口
+
+前置意图识别的入口在：
+
+- `core/handle/intentHandler.py`
+- `analyze_intent_with_llm()`
+- `process_intent_result()`
+
+其中：
+
+- `analyze_intent_with_llm()` 负责真正调用 `conn.intent.detect_intent(...)`
+- `process_intent_result()` 负责解释 `LLM` 返回结果并执行后续动作
+
+#### 10.4.2 与意图识别 LLM 的入参格式
+
+`intent_llm` 模式下，给大模型的入参不是完整聊天协议，而是一次“系统提示词 + 用户提示词”的轻量非流式调用。
+
+入参由两部分组成：
+
+1. `system_prompt`
+2. `user_prompt`
+
+其中：
+
+- `system_prompt` 由 `get_intent_system_prompt(functions)` 动态生成
+- `user_prompt` 由最近若干轮对话历史和本轮用户输入拼接而成
+
+`system_prompt` 的结构由以下几部分组成：
+
+1. 严格输出要求
+   - 只能输出 JSON
+   - 绝对不能输出自然语言
+2. 角色说明
+   - 你是一个意图识别助手
+   - 负责分析用户最后一句话并选择函数
+3. 特殊规则
+   - 时间、日期、农历、城市等基础问题返回 `result_for_context`
+   - 退出相关问句与真正退出命令区分开
+4. 可用函数列表
+   - 函数名
+   - 描述
+   - 参数结构
+5. 返回格式要求
+   - 必须包含 `function_call`
+   - `function_call` 必须包含 `name`
+   - 如需参数必须提供 `arguments`
+6. 多指令补充说明
+   - 单轮包含多个指令时允许返回 `function_calls`
+
+当前代码中，提示词还会附加以下动态信息：
+
+- `<musicNames>...</musicNames>`：本地音乐文件名列表
+- Home Assistant 设备列表：当启用 `home_assistant` 配置时，追加设备清单
+
+`user_prompt` 的实际格式如下：
+
+```text
+current dialogue:
+user: ...
+assistant: ...
+user: 本轮用户输入
+```
+
+这里的历史窗口默认取最近 `4` 条对话。
+
+#### 10.4.3 `intent_llm` 提示词的真实职责
+
+这个提示词虽然也会把工具定义交给大模型，但它的职责与 `function_call` 模式不同：
+
+- `intent_llm` 的模型职责是“做判断并返回 JSON 决策”
+- 它不直接承担完整聊天回复生成
+- 它不走主聊天流式输出链路
+- 它本质上是在主聊天前增加了一次“命令分流”步骤
+
+因此它和主聊天模型的关系是：
+
+- `intent_llm`：判断是否需要工具
+- 主聊天 `LLM`：真正自然语言回答
+
+#### 10.4.4 `intent_llm` 期望出参格式
+
+服务端期望 `intent_llm` 输出严格 JSON，典型格式如下：
+
+```json
+{"function_call": {"name": "continue_chat"}}
+```
+
+```json
+{"function_call": {"name": "result_for_context"}}
+```
+
+```json
+{"function_call": {"name": "get_weather", "arguments": {"city": "上海"}}}
+```
+
+```json
+{"function_calls": [
+  {"name": "light_on", "arguments": {"room": "bedroom"}},
+  {"name": "volume_up", "arguments": {"value": 10}}
+]}
+```
+
+当前实现最稳定、最核心的返回字段是：
+
+- `function_call.name`
+- `function_call.arguments`
+
+如果解析失败，服务端会兜底视为：
+
+```json
+{"function_call": {"name": "continue_chat"}}
+```
+
+#### 10.4.5 服务端拿到 `intent_llm` 出参后的处理流程
+
+`process_intent_result()` 会先对结果做 `json.loads(...)`，然后按以下分支处理：
+
+1. `continue_chat`
+   - 返回 `False`
+   - 上层继续走普通聊天 `conn.chat(actual_text)`
+
+2. `result_for_context`
+   - 先发送 STT 文本给客户端
+   - 将原始用户文本写入 `dialogue`
+   - 读取当前时间、日期、星期、农历
+   - 构造一个新的上下文提示词
+   - 再调用 `conn.intent.replyResult(context_prompt, original_text)`
+   - 生成自然语言答复并直接播报
+
+3. 普通工具调用
+   - 先把 `function_call.arguments` 规整成 JSON 字符串
+   - 组装成统一结构：
+
+```json
+{
+  "name": "tool_name",
+  "id": "uuid",
+  "arguments": "{\"key\":\"value\"}"
+}
+```
+
+   - 给客户端发送 STT 文本
+   - 上报工具调用
+   - 在线程池中执行统一工具处理器
+
+4. 工具执行后的动作分支
+   - `Action.RESPONSE`
+     - 直接播报工具返回的自然语言
+   - `Action.REQLLM`
+     - 先把工具结果包装成 `tool` 上下文
+     - 写入 `dialogue`
+     - 再调用 `conn.intent.replyResult(...)` 组织自然语言
+   - `Action.ERROR` / `Action.NOTFOUND`
+     - 直接播报错误或未找到信息
+
+#### 10.4.6 `intent_llm` 模式的关键特征
+
+从架构上看，`intent_llm` 模式有以下特点：
+
+- 会额外增加一次非流式 `LLM` 调用
+- 工具是否触发是在普通聊天之前就决定的
+- 如果命中工具，主聊天链路可以完全不参与
+- 更适合作为“命令识别前置层”
+- 延迟通常高于 `function_call` 模式
 
 ## 11. 普通聊天主流程
 
@@ -434,6 +607,177 @@ ASR 处理模型分两类：
    - 只传入对话
    - 直接产出回复文本
 
+### 11.3.1 `function_call` 模式与主 LLM 的交互目标
+
+`function_call` 模式下，没有独立的“前置意图识别请求”。
+
+它的核心思路是：
+
+- 直接把用户消息送入主聊天链路
+- 由主 `LLM` 在生成回复的同时，自主决定：
+  - 直接回答
+  - 发起一个或多个工具调用
+
+因此，`function_call` 模式不是“先判断、再聊天”，而是“聊天过程中顺带完成工具决策”。
+
+### 11.3.2 `function_call` 模式的 LLM 入参格式
+
+`function_call` 模式下，主聊天入口 `chat()` 会构造：
+
+1. `dialogue`
+2. `functions`
+
+然后调用：
+
+- `self.llm.response_with_functions(self.session_id, llm_dialogue, functions=functions)`
+
+其中 `dialogue` 是一个标准消息列表，典型元素包括：
+
+```json
+{"role": "system", "content": "静态系统提示词"}
+```
+
+```json
+{"role": "system", "content": "<context>动态上下文、记忆、说话人信息</context>"}
+```
+
+```json
+{"role": "user", "content": "用户问题"}
+```
+
+```json
+{
+  "role": "assistant",
+  "tool_calls": [
+    {
+      "id": "call_xxx",
+      "function": {
+        "name": "get_weather",
+        "arguments": "{\"city\":\"上海\"}"
+      },
+      "type": "function",
+      "index": 0
+    }
+  ]
+}
+```
+
+```json
+{
+  "role": "tool",
+  "tool_call_id": "call_xxx",
+  "content": "工具执行结果"
+}
+```
+
+`functions` 是当前可用工具的描述列表，来自：
+
+- `self.func_handler.get_functions()`
+
+其结构是 OpenAI 风格工具定义，典型形式如下：
+
+```json
+[
+  {
+    "type": "function",
+    "function": {
+      "name": "get_weather",
+      "description": "查询天气",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "city": {
+            "type": "string",
+            "description": "城市名"
+          }
+        },
+        "required": ["city"]
+      }
+    }
+  }
+]
+```
+
+此外，当前实现还会在 `function_call` 模式下注入一组 few-shot 临时消息，用于教会模型遵循标准工具调用三段式：
+
+- `assistant(tool_calls)`
+- `tool(result)`
+- `assistant(response)`
+
+这样做是为了让模型在第一轮就学习正确的工具使用模式，减少 provider 差异带来的调用退化。
+
+### 11.3.3 `function_call` 模式下主 LLM 的提示词来源
+
+`function_call` 模式并不会单独构造一份“意图识别专用提示词”。
+
+它使用的是主会话系统提示词，外加：
+
+- 当前语言约束
+- 动态上下文
+- 记忆内容
+- 说话人信息
+- 工具 few-shot 示例
+
+也就是说：
+
+- `intent_llm` 用的是“专门的意图识别提示词”
+- `function_call` 用的是“完整聊天提示词 + 工具定义 + few-shot”
+
+### 11.3.4 `function_call` 模式下主 LLM 的出参形态
+
+`response_with_functions(...)` 是流式接口。
+
+服务端消费时，期望每个 chunk 可能包含以下两类信息：
+
+1. 自然语言文本 `content`
+2. 工具调用增量 `tool_calls`
+
+因此上层统一按如下语义消费：
+
+- `(content, tools_call)`
+
+在真实 provider 适配层中，可能出现以下几种形态：
+
+1. 只有文本
+   - `content != None`
+   - `tools_call == None`
+
+2. 只有工具调用
+   - `content == None`
+   - `tools_call != None`
+
+3. 同一个 chunk 里既有文本又有工具调用
+   - 服务端会同时累积文本和工具调用片段
+
+4. 兼容性文本协议
+   - 有些 provider 不直接返回结构化 `tool_calls`
+   - 而是先输出 `<tool_call>` 前缀或 JSON 文本
+   - 服务端会在流式末尾尝试把累积文本解析为工具调用结构
+
+### 11.3.5 `function_call` 模式下服务端拿到出参后的流程
+
+服务端在消费 `response_with_functions(...)` 的每个 chunk 时，会按以下顺序处理：
+
+1. 累积自然语言文本到 `response_message`
+2. 首次遇到文本时触发情绪识别
+3. 如果发现 `tool_calls` 或 `<tool_call>` 信号，则置 `tool_call_flag = True`
+4. 使用 `_merge_tool_calls(tool_calls_list, tools_call)` 合并增量工具调用
+5. 如果最终存在工具调用，则抑制工具调用前的过程性自然语言，不直接播报
+
+`tool_calls_list` 的统一结构为：
+
+```json
+[
+  {
+    "id": "call_xxx",
+    "name": "get_weather",
+    "arguments": "{\"city\":\"上海\"}"
+  }
+]
+```
+
+这个结构是后续统一工具处理器的标准输入。
+
 ### 11.4 流式输出消费
 
 服务端会逐 chunk 处理 LLM 输出：
@@ -452,6 +796,181 @@ ASR 处理模型分两类：
 - 首段语言不符合当前会话语言时，才会进入“完整收集后流式改写”的兜底路径
 - 这样做是为了在首包延迟和语言一致性之间取得平衡
 - 工具调用链路仍然保留原有的工具执行与结果回填机制
+
+### 11.4.1 大模型流式输出后的真实处理顺序
+
+这里描述的是 `chat()` 在收到每个 LLM 流式 chunk 之后，当前代码真实会做的事情。
+
+按顺序可以拆成以下几步：
+
+1. 读取当前 `response`
+   - 普通聊天模式下，`response` 直接就是文本 chunk
+   - `function_call` 模式下，`response` 可能同时包含：
+     - `content`
+     - `tools_call`
+2. 判断当前连接是否已被 `abort`
+   - 如果 `client_abort = True`，直接跳出流式循环
+3. 打印原始 chunk 日志
+   - 用于后续排查 provider 原始返回是否异常
+4. 解析工具调用信号
+   - 如果当前是 `function_call` 模式
+   - 会持续累积 `content_arguments`
+   - 并根据 `tools_call` 或 `<tool_call>` 前缀设置 `tool_call_flag`
+5. 做一次情绪提取触发
+   - 只在本轮首次遇到非空文本时执行
+   - 用于异步推断表情或情绪状态
+6. 判断这段文本是否允许进入播报链路
+   - 必须满足：
+     - `content` 非空
+     - `tool_call_flag == False`
+7. 把文本写入 `response_message`
+   - 无论最终是否立刻播报
+   - 只要是自然语言文本，就先进入最终回复累积缓存
+8. 根据 `reply_stream_state` 决定后续路径
+   - `direct`
+   - `pending`
+   - `translate`
+
+这意味着，LLM 每个 chunk 出来后，并不会直接无条件进入 TTS。
+
+### 11.4.2 什么情况下 chunk 能直接进入 TTS 队列
+
+当前代码中，一段 LLM 文本能否直接进入 `tts_text_queue`，必须同时满足以下条件：
+
+1. 当前 chunk 有实际文本内容
+2. 当前不是工具调用过程文本
+3. `reply_stream_state == "direct"`
+
+真正写入 TTS 队列的动作是：
+
+- `_enqueue_tts_text_chunk(current_sentence_id, content)`
+
+写入的是一个 `TTSMessageDTO`，其特点是：
+
+- `sentence_type = MIDDLE`
+- `content_type = TEXT`
+- `content_detail = 当前可播报文本片段`
+
+因此，`tts_text_queue` 存放的是“已通过聊天层筛选、允许进入播报链路的文本消息”，而不是简单等于“大模型所有原始 chunk”。
+
+### 11.4.3 `reply_stream_state` 三态的含义
+
+当前聊天流式播报存在三个状态：
+
+1. `direct`
+   - 当前 chunk 可以直接进入 TTS
+2. `pending`
+   - 先缓冲文本，等待回复语言规则判断
+3. `translate`
+   - 原始回复不直接播报，等待整段完成后再改写成目标语言
+
+初始化规则是：
+
+- 如果当前没有目标回复语言约束，默认 `direct`
+- 如果当前要求回复语言是中文或英文，先 `pending`
+
+这套逻辑不是仓库最早就有的，而是在后续“回复语言判定与流式播报链路”优化中新增的状态机。
+
+### 11.4.4 `pending` 阶段具体会做什么
+
+当 `reply_stream_state == "pending"` 时：
+
+1. 当前 chunk 不会立刻进 `tts_text_queue`
+2. 先写入 `reply_pending_chunks`
+3. 把已缓冲文本拼成 `probe_text`
+4. 调 `_inspect_reply_stream_language(probe_text, target_language)` 做本地规则判断
+
+规则判断会返回三种结果：
+
+1. `matched`
+   - 说明当前首段文本符合目标语言
+   - 立刻切换到 `direct`
+   - 并把之前缓存的 `reply_pending_chunks` 全部补写进 `tts_text_queue`
+2. `mismatched`
+   - 说明当前首段文本明显不符合目标语言
+   - 切换到 `translate`
+   - 原始文本不直接播报
+3. `unknown`
+   - 说明当前信号还不够
+   - 继续保持 `pending`
+
+因此，`pending` 的本质是：
+
+- 先攒首个可判断语言的文本片段
+- 再决定后续回复到底走“直接播报”还是“改写后播报”
+
+### 11.4.5 为什么有些 LLM chunk 不会进入 TTS 队列
+
+以下几类 chunk 即使是模型正常输出，也可能不会直接进入 `tts_text_queue`：
+
+1. 工具调用过程文本
+   - 一旦识别为工具调用链路
+   - 过程性文本会被抑制，避免播报内部工具名
+2. `pending` 状态下尚未通过语言判定的文本
+   - 会先进入 `reply_pending_chunks`
+3. `translate` 状态下的原始文本
+   - 最终播报的是改写后的目标语言文本
+4. 空字符串或无效文本
+   - 不会进入播报链路
+
+所以，从实现角度看：
+
+- 大模型 chunk
+- 可播报文本消息
+- 最终 TTS 请求
+
+这三者不是一一对应关系。
+
+### 11.4.6 一轮流式输出结束后会做什么
+
+“这一轮文本结束了”的判断，不是依赖某个特殊 token，而是依赖：
+
+- `for response in llm_responses:` 流式迭代自然结束
+
+也就是说，只要：
+
+- LLM 不再返回新的 chunk
+- 或流式生成器完成
+
+服务端就会进入收尾阶段。
+
+收尾阶段主要做这些事：
+
+1. 关闭流式响应对象（如果 provider 提供了 `close()`）
+2. 处理工具调用
+3. 拼接完整 `response_message`
+4. 对 `pending` 状态做最终规则判断
+5. 必要时进入 `translate` 路径，调用 `_stream_rewrite_response_to_target_language(...)`
+6. 把最终文本写入对话历史
+7. 在顶层调用时向 `tts_text_queue` 投递一个 `SentenceType.LAST`
+
+这个 `LAST` 的含义是：
+
+- 本轮文本输入已经结束
+- 通知 TTS 线程做最后的收尾处理
+
+### 11.4.7 `LAST` 发出后 TTS 线程会做什么
+
+`LAST` 不是大模型发的，也不是 TTS provider 自己生成的，而是聊天主流程主动投递到 `tts_text_queue` 的结束标记。
+
+默认 TTS 基类在收到 `LAST` 时，会执行：
+
+- `_process_remaining_text_stream(...)`
+
+它的作用是：
+
+1. 从 `tts_text_buff` 中取出尚未被标点切分消费的尾部文本
+2. 把这段残余文本强制送去合成
+3. 防止最后半句因为没有等到新的标点而被吞掉
+
+因此，一轮完整的“LLM 流式输出结束”并不只意味着：
+
+- 不再有新的文本 chunk
+
+还意味着：
+
+- TTS 文本线程会收到一个明确的结束信号
+- 并据此完成文本清尾、音频收口和播报结束
 
 ### 11.5 回复语言流式判定链路
 
@@ -561,6 +1080,12 @@ sequenceDiagram
 
 服务端会统一整理成 `tool_calls_list`。
 
+补充说明：
+
+- 如果 provider 直接返回结构化 `tool_calls`，则在流式过程中边收集边合并
+- 如果 provider 只输出 `<tool_call>` 文本或完整 JSON 片段，服务端会在流式结束后再尝试解析
+- 最终只要能规整成 `tool_calls_list`，后续执行链路就完全一致
+
 ### 12.2 工具执行入口
 
 执行入口是：
@@ -574,6 +1099,151 @@ sequenceDiagram
 - 设备 IOT
 - 设备端 MCP
 - MCP 接入点工具
+
+`handle_llm_function_call(...)` 收到的单工具标准入参如下：
+
+```json
+{
+  "name": "tool_name",
+  "id": "call_xxx",
+  "arguments": "{\"key\":\"value\"}"
+}
+```
+
+如果是多工具调用，则入参格式为：
+
+```json
+{
+  "function_calls": [
+    {
+      "name": "tool_a",
+      "arguments": {
+        "key": "value"
+      }
+    },
+    {
+      "name": "tool_b",
+      "arguments": {
+        "key": "value"
+      }
+    }
+  ]
+}
+```
+
+统一工具层内部会继续做以下动作：
+
+1. 若 `arguments` 是字符串，则先 `json.loads(...)`
+2. 根据工具 schema 自动补 `language` / `lang` / `locale`
+3. 给设备发送“处理中”显示消息
+4. 通过 `ToolManager.execute_tool(...)` 路由到具体执行器
+
+### 12.2.1 `function_call` 模式下拿到出参后的完整后处理
+
+当 `chat()` 识别到最终存在工具调用后，后处理顺序如下：
+
+1. 丢弃工具调用前已经流出的过程性自然语言
+   - 避免把内部推理过程或工具名播报给用户
+
+2. 遍历 `tool_calls_list`
+   - 为每个工具调用上报开始事件
+   - 调用 `self.func_handler.handle_llm_function_call(...)`
+   - 等待超时结果，默认超时 `30s`
+
+3. 收集工具执行结果
+   - 成功则记录 `(ActionResponse, tool_call_data)`
+   - 超时或异常则转成统一 `Action.ERROR`
+
+4. 上报工具执行结果
+   - 将工具输入和工具输出写入上报链路
+
+5. 调用 `_handle_function_result(tool_results, depth, streamed_text)`
+   - 按 `Action` 类型进入不同分支
+
+### 12.2.2 `_handle_function_result(...)` 的动作分支
+
+`_handle_function_result(...)` 是工具结果和后续对话状态衔接的关键节点。
+
+它会把工具结果分成三类：
+
+1. `RESPONSE` / `ERROR` / `NOTFOUND`
+   - 直接把结果转成可播报文本
+   - 写入 TTS
+   - 同时补入 `dialogue` 的 `assistant` 消息
+
+2. `RECORD`
+   - 先写入一条 `assistant(tool_calls)` 消息
+   - 再写入对应的 `tool` 消息
+   - 最后补一条 `assistant(response)` 消息
+   - 不再继续请求 LLM
+
+3. `REQLLM`
+   - 先写入一条 `assistant(tool_calls)` 消息
+   - 再把工具结果包装成 `tool` 消息
+   - 然后递归调用 `self.chat(None, depth=depth + 1)`
+   - 让主 `LLM` 基于工具结果继续组织自然语言答案
+
+这里的递归调用是 `function_call` 模式非常关键的一点：
+
+- 第一轮 `LLM` 决定“要调用什么工具”
+- 第二轮 `LLM` 才基于工具结果生成自然语言回答
+
+因此 `function_call` 模式在复杂场景下，本质上可能形成：
+
+1. 用户问题
+2. 主 `LLM` 产出工具调用
+3. 工具执行
+4. 工具结果写回对话历史
+5. 主 `LLM` 再次生成最终答案
+
+### 12.2.3 对话历史中的工具调用回填格式
+
+为了让第二轮 `LLM` 能理解“刚才已经调用过哪些工具、结果是什么”，服务端会把工具链回填进 `dialogue`。
+
+回填格式如下：
+
+`assistant(tool_calls)`：
+
+```json
+{
+  "role": "assistant",
+  "tool_calls": [
+    {
+      "id": "call_xxx",
+      "function": {
+        "name": "get_weather",
+        "arguments": "{\"city\":\"上海\"}"
+      },
+      "type": "function",
+      "index": 0
+    }
+  ]
+}
+```
+
+`tool(result)`：
+
+```json
+{
+  "role": "tool",
+  "tool_call_id": "call_xxx",
+  "content": "天气查询结果"
+}
+```
+
+然后才会继续追加：
+
+```json
+{
+  "role": "assistant",
+  "content": "根据天气结果组织出的自然语言答复"
+}
+```
+
+这种三段式结构有两个作用：
+
+- 对 provider 保持标准兼容
+- 让后续轮次的模型能够持续学习并复用正确的工具调用模式
 
 ### 12.3 工具结果动作模型
 
@@ -772,7 +1442,104 @@ TTS 文本线程 `tts_text_priority_thread()` 负责消费这些消息。
 | `发送第一段语音` | 下发阶段 | 本轮第一段语音即将发给客户端时 | 常用于观察首包延迟和首句文案 |
 | `发送音频消息` | 下发阶段 | 服务端向设备发送某段音频时 | 包含 `SentenceType.FIRST/MIDDLE/LAST` |
 
-### 15.2 当前大模型日志策略
+### 15.2 `收到mcp消息` / `当前支持的函数列表` 处于什么阶段
+
+这几类日志经常和 `大模型收到用户消息` 混在一起出现，容易误判成已经进入 `function calling`。实际上，它们多数属于“工具同步 / 工具注册阶段”，而不是“工具执行阶段”。
+
+先看结论：
+
+- `大模型收到用户消息`
+  - 属于主聊天阶段
+  - 表示已经进入 `ConnectionHandler.chat()`
+- `收到mcp消息`
+  - 属于设备端 `MCP` 协议消息接收阶段
+  - 可能是初始化响应、工具列表响应、工具调用结果响应
+- `客户端设备支持的工具数量`
+  - 属于设备端 `MCP` 工具列表解析阶段
+  - 说明服务端刚拿到客户端声明的工具列表
+- `当前支持的函数列表`
+  - 属于统一工具汇总阶段
+  - 说明服务端把“本地工具 + 设备端 MCP 工具 + MCP 接入点工具”等能力汇总后，对当前可用函数做了一次输出
+
+因此，像下面这种连续日志：
+
+- `大模型收到用户消息: hi maia`
+- `收到mcp消息：{...tools...}`
+- `客户端设备支持的工具数量: 5`
+- `当前支持的函数列表: [...]`
+
+它的含义通常不是“模型已经决定调用某个函数”，而是：
+
+1. 用户文本已经开始进入主聊天流程
+2. 与此同时，设备端 `MCP` 还在完成工具列表回传
+3. 服务端收到工具列表后，刷新并汇总当前可用函数
+
+也就是说，这是“正式聊天阶段”和“工具同步阶段”并发交错的日志，不应直接认定为 `function calling`。
+
+只有出现下面这类日志时，才说明真正进入了工具执行阶段：
+
+- `执行工具: ...`
+- `发送客户端mcp工具调用请求`
+- `客户端mcp工具调用 ... 成功`
+- `发送MCP接入点工具调用请求`
+- `MCP接入点工具调用 ... 成功`
+
+### 15.3 从用户消息到真正进入 Function Calling 的时序
+
+下面用一个典型场景说明，为什么 `MCP` 工具列表同步日志会和聊天日志交错出现。
+
+```mermaid
+sequenceDiagram
+    participant Device as "设备客户端"
+    participant Processor as "TextMessageProcessor"
+    participant Conn as "ConnectionHandler"
+    participant MCP as "device_mcp.mcp_handler"
+    participant Tools as "UnifiedToolHandler"
+    participant LLM as "LLM Provider"
+
+    Device->>Processor: 用户文本消息 / 语音转文本结果
+    Processor->>Conn: startToChat()/chat()
+    Conn->>Conn: 打印`大模型收到用户消息`
+    Conn->>LLM: 发起主聊天请求
+    LLM->>LLM: 组装请求参数
+    LLM->>LLM: 打印`为模型 ... 启用 reasoning_split`
+
+    par 设备端 MCP 继续初始化
+        Device->>Processor: type=mcp, payload={id:2,result:{tools:[...]}}
+        Processor->>Processor: 打印`收到mcp消息`
+        Processor->>MCP: 分发 MCP 消息
+        MCP->>MCP: 解析 tools list
+        MCP->>MCP: 打印`客户端设备支持的工具数量`
+        MCP->>Tools: 注册设备端工具
+        Tools->>Tools: 汇总当前全部工具
+        Tools->>Tools: 打印`当前支持的函数列表`
+    and 主聊天继续
+        LLM-->>Conn: 返回文本 chunk 或 tool_calls
+    end
+
+    alt 模型只返回文本
+        Conn->>Conn: 直接进入回复播报链路
+    else 模型返回 tool_calls
+        Conn->>Tools: 执行统一工具
+        Tools->>Tools: 打印`执行工具: ...`
+        alt 工具来自设备端 MCP
+            Tools->>Device: 发送客户端mcp工具调用请求
+            Device-->>Tools: 客户端mcp工具调用结果
+        else 工具来自 MCP 接入点
+            Tools->>Tools: 打印`发送MCP接入点工具调用请求`
+            Tools-->>Tools: 打印`MCP接入点工具调用 ... 成功`
+        end
+        Tools-->>Conn: 返回工具结果
+        Conn->>LLM: 带工具结果进入下一轮对话
+    end
+```
+
+这张图强调了两个事实：
+
+- `收到mcp消息`、`客户端设备支持的工具数量`、`当前支持的函数列表` 更偏向“工具可用性同步”
+- `执行工具` 及后续 `mcp tool call` 日志，才是真正意义上的 `function calling`
+
+### 15.4 当前大模型日志策略
 
 当前大模型日志分两层：
 

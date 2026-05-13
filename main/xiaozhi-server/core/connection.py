@@ -148,11 +148,21 @@ class ConnectionHandler:
 
         # llm相关变量
         self.dialogue = Dialogue()
+        self.llm_first_token_state = {
+            "logged": False,
+            "start_time": 0.0,
+            "scene": None,
+        }
 
         # tts相关变量
         self.sentence_id = None
         # 处理TTS响应没有文本返回
         self.tts_MessageText = ""
+        self.tts_first_packet_state = {
+            "sentence_id": None,
+            "logged": False,
+            "start_time": 0.0,
+        }
 
         # iot相关变量
         self.iot_descriptors = {}
@@ -1166,6 +1176,11 @@ class ConnectionHandler:
 
         rewritten_chunks = []
         try:
+            self.llm_first_token_state = {
+                "logged": False,
+                "start_time": time.perf_counter(),
+                "scene": "reply_rewrite",
+            }
             for chunk in self.llm.response(self.session_id, dialogue):
                 if self.client_abort:
                     break
@@ -1174,6 +1189,19 @@ class ConnectionHandler:
                 chunk_text = str(chunk)
                 if not chunk_text:
                     continue
+                if not self.llm_first_token_state.get("logged"):
+                    elapsed_ms = int(
+                        (time.perf_counter() - self.llm_first_token_state["start_time"])
+                        * 1000
+                    )
+                    self.logger.bind(tag=TAG).info(
+                        "LLM首token: "
+                        f"scene={self.llm_first_token_state.get('scene')}, "
+                        f"session_id={self.session_id}, "
+                        f"elapsed_ms={elapsed_ms}, "
+                        f"token={chunk_text[:120]!r}"
+                    )
+                    self.llm_first_token_state["logged"] = True
                 rewritten_chunks.append(chunk_text)
                 self._enqueue_tts_text_chunk(sentence_id, chunk_text)
 
@@ -1250,6 +1278,11 @@ class ConnectionHandler:
         if depth == 0:
             current_sentence_id = str(uuid.uuid4().hex)
             self.sentence_id = current_sentence_id  # 更新共享属性
+            self.tts_first_packet_state = {
+                "sentence_id": current_sentence_id,
+                "logged": False,
+                "start_time": time.perf_counter(),
+            }
             self.dialogue.put(Message(role="user", content=query))
             self.tts.tts_text_queue.put(
                 TTSMessageDTO(
@@ -1338,6 +1371,11 @@ class ConnectionHandler:
                     self.session_id,
                     llm_dialogue,
                 )
+            self.llm_first_token_state = {
+                "logged": False,
+                "start_time": time.perf_counter(),
+                "scene": "chat",
+            }
         except Exception as e:
             self.logger.bind(tag=TAG).error(f"LLM 处理出错 {query}: {e}")
             return None
@@ -1373,6 +1411,28 @@ class ConnectionHandler:
                         tool_call_flag = True
 
                     if tools_call is not None and len(tools_call) > 0:
+                        if not self.llm_first_token_state.get("logged"):
+                            first_tool_call = tools_call[0]
+                            tool_name = getattr(
+                                getattr(first_tool_call, "function", None),
+                                "name",
+                                None,
+                            )
+                            elapsed_ms = int(
+                                (
+                                    time.perf_counter()
+                                    - self.llm_first_token_state["start_time"]
+                                )
+                                * 1000
+                            )
+                            self.logger.bind(tag=TAG).info(
+                                "LLM首token: "
+                                f"scene=function_call, "
+                                f"session_id={self.session_id}, "
+                                f"elapsed_ms={elapsed_ms}, "
+                                f"tool_name={tool_name!r}"
+                            )
+                            self.llm_first_token_state["logged"] = True
                         tool_call_flag = True
                         self._merge_tool_calls(tool_calls_list, tools_call)
                 else:
@@ -1387,6 +1447,19 @@ class ConnectionHandler:
                     emotion_flag = False
 
                 if content is not None and len(content) > 0:
+                    if not self.llm_first_token_state.get("logged"):
+                        elapsed_ms = int(
+                            (time.perf_counter() - self.llm_first_token_state["start_time"])
+                            * 1000
+                        )
+                        self.logger.bind(tag=TAG).info(
+                            "LLM首token: "
+                            f"scene={self.llm_first_token_state.get('scene')}, "
+                            f"session_id={self.session_id}, "
+                            f"elapsed_ms={elapsed_ms}, "
+                            f"token={str(content)[:120]!r}"
+                        )
+                        self.llm_first_token_state["logged"] = True
                     if not tool_call_flag:
                         response_message.append(content)
                         if reply_stream_state == "direct":

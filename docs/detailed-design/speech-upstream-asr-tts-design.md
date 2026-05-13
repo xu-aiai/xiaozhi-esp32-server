@@ -205,6 +205,7 @@
 ### 6.1 代码位置
 
 - `main/xiaozhi-server/core/providers/tts/upstream_tts.py`
+- `main/xiaozhi-server/core/providers/tts/base.py`
 
 ### 6.2 实现类型
 
@@ -214,7 +215,179 @@
 - 返回完整音频字节
 - 再由现有 `TTSProviderBase` 完成切包、编码和下发
 
-### 6.3 请求构造
+### 6.3 TTS Provider 基类运行机制
+
+当前项目中的绝大多数 `TTS provider` 都建立在统一基类 `TTSProviderBase` 之上。
+
+基类的核心职责包括：
+
+1. 维护两条队列
+   - `tts_text_queue`：接收待合成的文本消息
+   - `tts_audio_queue`：接收待下发给设备的音频帧
+2. 启动两个后台线程
+   - `tts_text_priority_thread()`：消费文本并触发合成
+   - `_audio_play_priority_thread()`：消费音频并通过 WebSocket 下发
+3. 统一文本预处理
+   - 去除 Markdown
+   - 应用替换词 `correct_words`
+4. 统一音频编码
+   - 将上游返回的音频转为 `Opus`
+   - 再切成设备下发所需的数据包
+
+这意味着：即使不同 `provider` 对接的上游服务不同，文本消息和音频消息在服务端的生命周期仍然遵循统一框架。
+
+### 6.4 `tts_text_queue` 与 `tts_audio_queue` 的职责
+
+#### 6.4.1 `tts_text_queue`
+
+`tts_text_queue` 存放的是“已经允许进入语音播报链路的文本消息”，而不是简单等同于“大模型输出的所有原始 chunk”。
+
+其上游可能来自：
+
+- 普通聊天回复
+- 工具执行后的直接播报文本
+- 结束提示语
+- 绑定提示音对应的补充文本
+
+消息结构统一为 `TTSMessageDTO`，其中核心字段包括：
+
+- `sentence_id`
+- `sentence_type`
+  - `FIRST`
+  - `MIDDLE`
+  - `LAST`
+- `content_type`
+  - `TEXT`
+  - `FILE`
+- `content_detail`
+- `content_file`
+
+#### 6.4.2 `tts_audio_queue`
+
+`tts_audio_queue` 存放的是已经过编码、准备发回设备的音频帧及控制边界信息。
+
+其消费者 `_audio_play_priority_thread()` 会负责：
+
+1. 发送 `sentence_start`
+2. 发送音频包
+3. 发送 `stop`
+4. 上报最终的 TTS 文本和音频数据
+
+### 6.5 基类默认的文本分段逻辑
+
+如果某个 `TTS provider` 没有重写 `tts_text_priority_thread()`，就会走基类默认逻辑。
+
+默认逻辑如下：
+
+1. 从 `tts_text_queue` 取出 `TEXT` 消息
+2. 将 `message.content_detail` 追加到 `tts_text_buff`
+3. 调 `_get_segment_text()` 尝试切出一段可合成文本
+4. 只有切出了完整段落，才调用 `to_tts_stream(...)`
+5. 收到 `LAST` 时，调用 `_process_remaining_text_stream()` 补发尾部残余文本
+
+默认切分策略：
+
+- 首句允许更激进的切分
+  - `，`
+  - `、`
+  - `~`
+  - `。！？；：`
+- 后续句子主要按结束标点切分
+  - `。！？；：`
+
+`_process_remaining_text_stream()` 的作用是：
+
+- 如果最后一段文本一直没有等到新的分句标点
+- 在收到 `LAST` 时强制把尾部残余文本送去合成
+- 避免最后半句被吞掉
+
+### 6.6 `UpstreamTTS` 的具体运行方式
+
+`UpstreamTTS` 没有重写 `tts_text_priority_thread()`，因此它完整继承了基类默认行为：
+
+1. 文本先进入 `tts_text_queue`
+2. 基类按标点把文本切成一个个 `segment`
+3. 每个 `segment` 调一次 `UpstreamTTS.text_to_speak(...)`
+4. 上游返回整段音频二进制
+5. 本地再转成 `Opus` 并写入 `tts_audio_queue`
+
+因此，`UpstreamTTS` 的真实行为不是：
+
+- 每个 LLM chunk 调一次上游 TTS
+
+而是：
+
+- 每个“分句后的 segment”调一次上游 TTS
+
+这也是在日志里经常只看到一次：
+
+- `发起上游TTS请求`
+- `上游TTS响应成功`
+
+而不是看到与大模型 chunk 数量一一对应的 TTS 请求。
+
+### 6.7 流式 TTS Provider 的两种实现形态
+
+虽然当前默认 `UpstreamTTS` 是非流式的，但项目里已经存在多种流式 TTS provider。按文本消费方式可以分成两类：
+
+#### 6.7.1 类型 A：文本消息直发
+
+代表：
+
+- `core/providers/tts/xunfei_stream.py`
+- `core/providers/tts/huoshan_double_stream.py`
+
+这类 `provider` 会重写 `tts_text_priority_thread()`，其特点是：
+
+1. `FIRST` 时建立或启动上游会话
+2. `TEXT` 时直接把 `message.content_detail` 发给上游流式接口
+3. `LAST` 时发送结束会话信号
+4. 后台监听任务持续接收上游返回的音频流
+
+这里的“直发”指的是：
+
+- 只要文本消息已经进入 `tts_text_queue`
+- provider 自己就不再等待标点二次聚合
+- 而是直接把该条 `content_detail` 发送给上游
+
+#### 6.7.2 类型 B：上游音频流式返回，但文本侧仍先聚合
+
+代表：
+
+- `core/providers/tts/index_stream.py`
+- `core/providers/tts/minimax_httpstream.py`
+
+这类 `provider` 的特点是：
+
+1. 上游接口返回的是流式音频
+2. 但本地仍然先把文本累积到 `tts_text_buff`
+3. 按标点切出 `segment`
+4. 每个 `segment` 单独调用一次上游流式 TTS
+5. 再把流式音频持续编码并下发
+
+因此它们属于：
+
+- 音频链路流式
+- 文本链路仍是“分句后逐段调用”
+
+### 6.8 为什么要区分这两类流式 TTS
+
+区分这两类实现非常重要，因为它们决定了以下行为差异：
+
+1. 上游 TTS 调用频率
+   - 类型 A 更接近“每条文本消息一次”
+   - 类型 B 更接近“每个分句段落一次”
+2. 首包延迟
+   - 类型 A 通常更早启动上游生成
+   - 类型 B 需要先等到本地切句成立
+3. 日志观察方式
+   - 类型 A 更容易看到高频文本发送日志
+   - 类型 B 更容易看到按句粒度的请求日志
+4. 对上游协议的要求
+   - 类型 A 更适合真正支持会话级增量文本输入的双向流式协议
+   - 类型 B 更适合“单次请求、持续返回音频流”的协议
+
+### 6.9 请求构造
 
 请求方式：
 
@@ -240,14 +413,20 @@
 - `model`，仅配置时发送
 - `extra` 中的自定义顶层字段
 
-### 6.4 返回处理
+另外，当前 `UpstreamTTS` 实现会在运行时强制覆盖 `instructions`，统一发送：
+
+- `强制语气平缓，不带情绪。禁止抑扬顿挫。`
+
+因此，即使配置中存在其他 `instructions`，实际发送给上游的仍是这条固定语气约束。
+
+### 6.10 返回处理
 
 返回值为音频二进制：
 
 - 如果调用方要求写文件，落盘到 `output_file`
 - 否则直接返回音频字节数组
 
-### 6.5 配置项
+### 6.11 配置项
 
 支持的配置项如下：
 
@@ -264,7 +443,7 @@
 - `output_dir`
 - `extra`
 
-### 6.6 为什么默认不用 WebSocket 流式 TTS
+### 6.12 为什么默认不用 WebSocket 流式 TTS
 
 虽然上游已经提供了流式 TTS WebSocket 接口，但当前默认实现仍选择 HTTP 版本，原因如下：
 
