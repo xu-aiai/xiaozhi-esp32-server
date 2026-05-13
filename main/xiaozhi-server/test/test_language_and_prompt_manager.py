@@ -32,7 +32,7 @@ sys.modules.setdefault("config", fake_config)
 sys.modules["config.logger"] = fake_logger_module
 sys.modules["jinja2"] = fake_jinja2
 
-from core.utils.language_detector import update_session_language
+from core.utils.language_detector import detect_language_with_llm, update_session_language
 from core.utils.language import get_display_text, get_end_prompt_text
 from core.utils.prompt_manager import PromptManager
 from core.utils.textUtils import strip_markdown_for_display
@@ -59,6 +59,23 @@ class UpdateSessionLanguageTest(unittest.TestCase):
         result = update_session_language(conn, "Unknown", "ok")
 
         self.assertEqual(result, "English")
+
+
+class RuleLanguageDetectorTest(unittest.TestCase):
+    def test_detects_chinese_by_rules(self):
+        result = detect_language_with_llm(None, "今天天气不错", "English")
+
+        self.assertEqual(result, "Chinese")
+
+    def test_detects_english_by_rules(self):
+        result = detect_language_with_llm(None, "please play some music", "Chinese")
+
+        self.assertEqual(result, "English")
+
+    def test_unknown_text_keeps_current_language(self):
+        result = detect_language_with_llm(None, "123456", "Chinese")
+
+        self.assertEqual(result, "Chinese")
 
 
 class PromptManagerWeatherPrefetchTest(unittest.TestCase):
