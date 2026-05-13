@@ -2,7 +2,6 @@ import os
 import asyncio
 import yaml
 from collections.abc import Mapping
-from config.logger import setup_logging
 from config.manage_api_client import (
     init_service,
     get_server_config,
@@ -13,7 +12,6 @@ from config.manage_api_client import (
 )
 
 TAG = __name__
-logger = setup_logging()
 
 
 def get_project_dir():
@@ -74,6 +72,8 @@ async def get_config_from_api_async(config):
     config_data = await get_server_config()
     if config_data is None:
         raise Exception("Failed to fetch server config from API")
+    from config.logger import setup_logging
+    logger = setup_logging()
     logger.bind(tag=TAG).info(
         "server-base配置: "
         f"wakeup_words={config_data.get('wakeup_words')}, "
