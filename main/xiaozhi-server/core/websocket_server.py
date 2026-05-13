@@ -174,13 +174,6 @@ class WebSocketServer:
                 )
                 # 更新配置
                 self.config = new_config
-                self.logger.bind(tag=TAG).info(
-                    "热更新后的基础配置: "
-                    f"wakeup_words={self.config.get('wakeup_words')}, "
-                    f"enable_greeting={self.config.get('enable_greeting')}, "
-                    "enable_wakeup_words_response_cache="
-                    f"{self.config.get('enable_wakeup_words_response_cache')}"
-                )
                 # 重新初始化组件
                 modules = initialize_modules(
                     self.logger,
