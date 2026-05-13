@@ -121,6 +121,10 @@ DISPLAY_TEXT_I18N = {
         "Spanish": "Procesando",
         "Italian": "Elaborazione in corso",
         "Arabic": "جارٍ المعالجة",
+    },
+    "wakeup_greeting": {
+        "Chinese": "嘿，你好呀",
+        "English": "Hey, hello there",
     }
 }
 
@@ -221,6 +225,17 @@ def get_conn_display_text(conn, key: str, default="正在处理"):
     """从连接对象读取当前会话语言，并返回对应的国际化展示文案。"""
     session_language = getattr(conn, "current_language", None) if conn else None
     return get_display_text(key, session_language, default=default)
+
+
+def get_wakeup_greeting_text(language, default="嘿，你好呀"):
+    """按当前会话语言返回唤醒后的固定问候语。"""
+    return get_display_text("wakeup_greeting", language, default=default)
+
+
+def get_conn_wakeup_greeting_text(conn, default="嘿，你好呀"):
+    """从连接对象读取当前会话语言，并返回对应的唤醒问候语。"""
+    session_language = getattr(conn, "current_language", None) if conn else None
+    return get_wakeup_greeting_text(session_language, default=default)
 
 
 def get_end_prompt_text(language, configured_prompt=None):

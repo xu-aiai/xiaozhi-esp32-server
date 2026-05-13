@@ -10,6 +10,8 @@ from core.handle.reportHandle import enqueue_asr_report
 from core.handle.sendAudioHandle import send_stt_message, send_tts_message
 from core.handle.textMessageHandler import TextMessageHandler
 from core.handle.textMessageType import TextMessageType
+from core.utils.language import get_conn_wakeup_greeting_text
+from core.utils.language_detector import detect_language_with_llm, update_session_language
 from core.utils.util import remove_punctuation_and_length
 from core.providers.asr.dto.dto import InterfaceType
 
@@ -65,10 +67,19 @@ class ListenTextMessageHandler(TextMessageHandler):
                     await send_tts_message(conn, "stop", None)
                     conn.client_is_speaking = False
                 elif is_wakeup_words:
+                    detected_language = detect_language_with_llm(
+                        None,
+                        original_text,
+                        getattr(conn, "current_language", None),
+                    )
+                    conn.current_language = update_session_language(
+                        conn, detected_language, original_text
+                    )
+                    wakeup_greeting = get_conn_wakeup_greeting_text(conn)
                     conn.just_woken_up = True
                     # 上报纯文字数据（复用ASR上报功能，但不提供音频数据）
-                    enqueue_asr_report(conn, "嘿，你好呀", [])
-                    await startToChat(conn, "嘿，你好呀")
+                    enqueue_asr_report(conn, wakeup_greeting, [])
+                    await startToChat(conn, wakeup_greeting)
                 else:
                     conn.just_woken_up = True
                     # 上报纯文字数据（复用ASR上报功能，但不提供音频数据）
