@@ -362,6 +362,10 @@ class TTSProviderBase(ABC):
                     self.tts_text_buff.append(message.content_detail)
                     segment_text = self._get_segment_text()
                     if segment_text:
+                        logger.bind(tag=TAG).info(
+                            f"提交TTS片段: sentence_id={message.sentence_id}, "
+                            f"text_len={len(segment_text)}, text_preview={segment_text[:80]!r}"
+                        )
                         self.to_tts_stream(segment_text, opus_handler=self.handle_opus)
                 elif ContentType.FILE == message.content_type:
                     self._process_remaining_text_stream(opus_handler=self.handle_opus)
@@ -442,7 +446,11 @@ class TTSProviderBase(ABC):
                     add_device_output(self.conn.headers.get("device-id"), len(text))
 
             except Exception as e:
-                logger.bind(tag=TAG).error(f"audio_play_priority_thread: {text} {e}")
+                logger.bind(tag=TAG).error(
+                    f"audio_play_priority_thread异常: text={text!r}, "
+                    f"error={str(e)}, type={type(e).__name__}, "
+                    f"traceback={traceback.format_exc()}"
+                )
 
     async def start_session(self, session_id):
         pass

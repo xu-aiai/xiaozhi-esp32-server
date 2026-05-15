@@ -14,6 +14,7 @@ from core.utils.language import get_conn_wakeup_greeting_text
 from core.utils.language_detector import detect_language_with_llm, update_session_language
 from core.utils.util import remove_punctuation_and_length
 from core.providers.asr.dto.dto import InterfaceType
+from core.handle.helloHandle import is_fixed_wakeup_text, reply_fixed_wakeup
 
 TAG = __name__
 
@@ -55,6 +56,10 @@ class ListenTextMessageHandler(TextMessageHandler):
                 filtered_len, filtered_text = remove_punctuation_and_length(
                     original_text
                 )
+
+                if is_fixed_wakeup_text(original_text):
+                    await reply_fixed_wakeup(conn, original_text)
+                    return
 
                 # 识别是否是唤醒词
                 is_wakeup_words = filtered_text in conn.config.get("wakeup_words")

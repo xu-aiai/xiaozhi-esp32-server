@@ -15,6 +15,7 @@ from core.utils.language_detector import (
 from core.utils.language import get_end_prompt_text
 from core.utils.output_counter import check_device_output_limit
 from core.handle.sendAudioHandle import send_stt_message, send_tts_message, SentenceType
+from core.handle.helloHandle import is_fixed_wakeup_text, reply_fixed_wakeup
 
 TAG = __name__
 
@@ -88,6 +89,10 @@ async def startToChat(
     # manual 模式下不打断正在播放的内容
     if conn.client_is_speaking and conn.client_listen_mode != "manual":
         await handleAbortMessage(conn)
+
+    if is_fixed_wakeup_text(detection_text):
+        await reply_fixed_wakeup(conn, actual_text)
+        return
 
     # 使用主LLM进行轻量语言分类，再驱动当前会话的Prompt和TTS语言
     try:

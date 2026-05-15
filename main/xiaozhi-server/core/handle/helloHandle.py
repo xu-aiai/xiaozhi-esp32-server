@@ -9,13 +9,16 @@ if TYPE_CHECKING:
     from core.connection import ConnectionHandler
 from core.utils.dialogue import Message
 from core.utils.util import audio_to_data
-from core.providers.tts.dto.dto import SentenceType
+from core.providers.tts.dto.dto import SentenceType, ContentType, TTSMessageDTO
 from core.utils.wakeup_word import WakeupWordsConfig
-from core.handle.sendAudioHandle import sendAudioMessage, send_tts_message
+from core.handle.sendAudioHandle import sendAudioMessage, send_tts_message, send_stt_message
 from core.utils.util import remove_punctuation_and_length, opus_datas_to_wav_bytes
 from core.providers.tools.device_mcp import MCPClient, send_mcp_initialize_message
 
 TAG = __name__
+FIXED_WAKEUP_TEXT = "hi maia"
+FIXED_WAKEUP_REPLY = "hi,what can i do for you"
+_, FIXED_WAKEUP_MATCH_TEXT = remove_punctuation_and_length(FIXED_WAKEUP_TEXT)
 
 WAKEUP_CONFIG = {
     "refresh_time": 10,
@@ -119,6 +122,53 @@ async def checkWakeupWords(conn: "ConnectionHandler", text):
         if not _wakeup_response_lock.locked():
             asyncio.create_task(wakeupWordsResponse(conn))
     return True
+
+
+def is_fixed_wakeup_text(text: str) -> bool:
+    """检查是否命中固定唤醒词 hi maia。"""
+    if not text:
+        return False
+    _, filtered_text = remove_punctuation_and_length(text)
+    return filtered_text.lower() == FIXED_WAKEUP_MATCH_TEXT.lower()
+
+
+async def reply_fixed_wakeup(conn: "ConnectionHandler", text: str | None = None):
+    """命中固定唤醒词后，直接返回固定文本和语音，不再进入其他逻辑。"""
+    conn.just_woken_up = True
+    conn.client_abort = False
+    conn.sentence_id = str(uuid.uuid4().hex)
+    conn.logger.bind(tag=TAG).info(
+        f"命中固定唤醒词，直接回复: wakeup={FIXED_WAKEUP_TEXT!r}, text={text!r}"
+    )
+
+    # 先把用户文本回给客户端，保持前端字幕一致
+    if text:
+        await send_stt_message(conn, text)
+    else:
+        await send_tts_message(conn, "start", FIXED_WAKEUP_REPLY)
+
+    conn.tts.store_tts_text(conn.sentence_id, FIXED_WAKEUP_REPLY)
+    conn.tts.tts_text_queue.put(
+        TTSMessageDTO(
+            sentence_id=conn.sentence_id,
+            sentence_type=SentenceType.FIRST,
+            content_type=ContentType.ACTION,
+        )
+    )
+    conn.tts.tts_one_sentence(
+        conn,
+        ContentType.TEXT,
+        content_detail=FIXED_WAKEUP_REPLY,
+    )
+    conn.tts.tts_text_queue.put(
+        TTSMessageDTO(
+            sentence_id=conn.sentence_id,
+            sentence_type=SentenceType.LAST,
+            content_type=ContentType.ACTION,
+        )
+    )
+    conn.dialogue.put(Message(role="assistant", content=FIXED_WAKEUP_REPLY))
+    conn.client_is_speaking = True
 
 
 async def wakeupWordsResponse(conn: "ConnectionHandler"):

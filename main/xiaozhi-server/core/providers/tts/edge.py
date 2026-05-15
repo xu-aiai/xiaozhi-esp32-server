@@ -3,6 +3,11 @@ import uuid
 import edge_tts
 from datetime import datetime
 from core.providers.tts.base import TTSProviderBase
+from config.logger import setup_logging
+
+
+TAG = __name__
+logger = setup_logging()
 
 
 class TTSProvider(TTSProviderBase):
@@ -22,6 +27,10 @@ class TTSProvider(TTSProviderBase):
 
     async def text_to_speak(self, text, output_file):
         try:
+            logger.bind(tag=TAG).info(
+                f"发起EdgeTTS请求: voice={self.voice}, text_len={len(text)}, "
+                f"text_preview={text[:80]!r}, output_file={output_file or '<memory>'}"
+            )
             communicate = edge_tts.Communicate(text, voice=self.voice)
             if output_file:
                 # 确保目录存在并创建空文件
@@ -30,17 +39,26 @@ class TTSProvider(TTSProviderBase):
                     pass
 
                 # 流式写入音频数据
+                total_bytes = 0
                 with open(output_file, "ab") as f:  # 改为追加模式避免覆盖
                     async for chunk in communicate.stream():
                         if chunk["type"] == "audio":  # 只处理音频数据块
+                            total_bytes += len(chunk["data"])
                             f.write(chunk["data"])
+                logger.bind(tag=TAG).info(
+                    f"EdgeTTS响应成功: output_file={output_file}, bytes={total_bytes}"
+                )
             else:
                 # 返回音频二进制数据
                 audio_bytes = b""
                 async for chunk in communicate.stream():
                     if chunk["type"] == "audio":
                         audio_bytes += chunk["data"]
+                logger.bind(tag=TAG).info(
+                    f"EdgeTTS响应成功: bytes={len(audio_bytes)}"
+                )
                 return audio_bytes
         except Exception as e:
             error_msg = f"Edge TTS请求失败: {e}"
+            logger.bind(tag=TAG).error(error_msg)
             raise Exception(error_msg)  # 抛出异常，让调用方捕获
