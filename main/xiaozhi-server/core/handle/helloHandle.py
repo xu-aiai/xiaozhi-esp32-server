@@ -17,7 +17,12 @@ from core.providers.tools.device_mcp import MCPClient, send_mcp_initialize_messa
 
 TAG = __name__
 FIXED_WAKEUP_TEXT = "hi maia"
-FIXED_WAKEUP_REPLY = "hi,what can i do for you"
+FIXED_WAKEUP_REPLIES = [
+    "hi, what can i do for you",
+    "hello, what can I help you with",
+    "i'm here, go ahead",
+    "yes, tell me what you need",
+]
 _, FIXED_WAKEUP_MATCH_TEXT = remove_punctuation_and_length(FIXED_WAKEUP_TEXT)
 
 WAKEUP_CONFIG = {
@@ -134,6 +139,7 @@ def is_fixed_wakeup_text(text: str) -> bool:
 
 async def reply_fixed_wakeup(conn: "ConnectionHandler", text: str | None = None):
     """命中固定唤醒词后，直接返回固定文本和语音，不再进入其他逻辑。"""
+    reply_text = random.choice(FIXED_WAKEUP_REPLIES)
     conn.just_woken_up = True
     conn.client_abort = False
     conn.sentence_id = str(uuid.uuid4().hex)
@@ -145,9 +151,9 @@ async def reply_fixed_wakeup(conn: "ConnectionHandler", text: str | None = None)
     if text:
         await send_stt_message(conn, text)
     else:
-        await send_tts_message(conn, "start", FIXED_WAKEUP_REPLY)
+        await send_tts_message(conn, "start", reply_text)
 
-    conn.tts.store_tts_text(conn.sentence_id, FIXED_WAKEUP_REPLY)
+    conn.tts.store_tts_text(conn.sentence_id, reply_text)
     conn.tts.tts_text_queue.put(
         TTSMessageDTO(
             sentence_id=conn.sentence_id,
@@ -158,7 +164,7 @@ async def reply_fixed_wakeup(conn: "ConnectionHandler", text: str | None = None)
     conn.tts.tts_one_sentence(
         conn,
         ContentType.TEXT,
-        content_detail=FIXED_WAKEUP_REPLY,
+        content_detail=reply_text,
     )
     conn.tts.tts_text_queue.put(
         TTSMessageDTO(
@@ -167,7 +173,7 @@ async def reply_fixed_wakeup(conn: "ConnectionHandler", text: str | None = None)
             content_type=ContentType.ACTION,
         )
     )
-    conn.dialogue.put(Message(role="assistant", content=FIXED_WAKEUP_REPLY))
+    conn.dialogue.put(Message(role="assistant", content=reply_text))
     conn.client_is_speaking = True
 
 
@@ -195,7 +201,7 @@ async def wakeupWordsResponse(conn: "ConnectionHandler"):
 
         # 使用链接的sample_rate
         wav_bytes = opus_datas_to_wav_bytes(tts_result, sample_rate=conn.sample_rate)
-        file_path = wakeup_words_config.generate_file_path(voice)
+        file_path = wakeup_words_config.generate_file_path(voice, result)
         with open(file_path, "wb") as f:
             f.write(wav_bytes)
         # 更新配置

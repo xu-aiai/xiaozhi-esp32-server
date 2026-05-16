@@ -2,6 +2,7 @@ import os
 import re
 import yaml
 import time
+import random
 import hashlib
 import portalocker
 from typing import Dict
@@ -93,12 +94,30 @@ class WakeupWordsConfig:
         if not config or voice not in config:
             return None
 
-        # 检查文件大小
-        file_path = config[voice]["file_path"]
-        if not os.path.exists(file_path) or os.stat(file_path).st_size < (15 * 1024):
+        voice_config = config[voice]
+
+        # 兼容旧结构：单条回复直接返回
+        if "file_path" in voice_config:
+            file_path = voice_config["file_path"]
+            if not os.path.exists(file_path) or os.stat(file_path).st_size < (15 * 1024):
+                return None
+            return voice_config
+
+        responses = voice_config.get("responses", [])
+        valid_responses = []
+        for response in responses:
+            file_path = response.get("file_path")
+            if (
+                file_path
+                and os.path.exists(file_path)
+                and os.stat(file_path).st_size >= (15 * 1024)
+            ):
+                valid_responses.append(response)
+
+        if not valid_responses:
             return None
 
-        return config[voice]
+        return random.choice(valid_responses)
 
     def update_wakeup_response(self, voice: str, file_path: str, text: str):
         """更新唤醒词回复配置"""
@@ -108,25 +127,57 @@ class WakeupWordsConfig:
             
             config = self._load_config()
             voice_hash = hashlib.md5(voice.encode()).hexdigest()
+            voice_config = config.get(voice_hash, {})
+
+            # 兼容旧结构：迁移单条回复到 responses 列表
+            responses = []
+            if voice_config.get("file_path"):
+                responses.append(
+                    {
+                        "file_path": voice_config.get("file_path"),
+                        "time": voice_config.get("time", 0),
+                        "text": voice_config.get("text", ""),
+                    }
+                )
+            else:
+                responses = list(voice_config.get("responses", []))
+
+            updated = False
+            for index, response in enumerate(responses):
+                if response.get("text") == filtered_text:
+                    responses[index] = {
+                        "file_path": file_path,
+                        "time": time.time(),
+                        "text": filtered_text,
+                    }
+                    updated = True
+                    break
+
+            if not updated:
+                responses.append(
+                    {
+                        "file_path": file_path,
+                        "time": time.time(),
+                        "text": filtered_text,
+                    }
+                )
+
             config[voice_hash] = {
                 "voice": voice,
-                "file_path": file_path,
-                "time": time.time(),
-                "text": filtered_text,
+                "responses": responses,
             }
             self._save_config(config)
         except Exception as e:
             print(f"更新唤醒词回复配置失败: {e}")
             raise
 
-    def generate_file_path(self, voice: str) -> str:
-        """生成音频文件路径，使用voice的哈希值作为文件名"""
+    def generate_file_path(self, voice: str, text: str = "") -> str:
+        """生成音频文件路径，使用 voice 和文本哈希值作为文件名。"""
         try:
-            # 生成voice的哈希值
             voice_hash = hashlib.md5(voice.encode()).hexdigest()
-            file_path = os.path.join(self.assets_dir, f"{voice_hash}.wav")
+            text_hash = hashlib.md5(text.encode("utf-8")).hexdigest()[:16] if text else "default"
+            file_path = os.path.join(self.assets_dir, f"{voice_hash}_{text_hash}.wav")
 
-            # 如果文件已存在，先删除
             if os.path.exists(file_path):
                 try:
                     os.remove(file_path)
