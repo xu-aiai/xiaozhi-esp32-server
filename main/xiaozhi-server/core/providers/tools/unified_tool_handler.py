@@ -13,7 +13,7 @@ from .server_mcp import ServerMCPExecutor
 from .device_iot import DeviceIoTExecutor
 from .device_mcp import DeviceMCPExecutor
 from .mcp_endpoint import MCPEndpointExecutor
-from core.handle.sendAudioHandle import send_display_message
+from core.handle.sendAudioHandle import send_tool_processing_message
 from core.utils.language import (
     get_conn_display_text,
     get_conn_downstream_language,
@@ -235,9 +235,9 @@ class UnifiedToolHandler:
 
             # 发送通用状态到设备，不暴露内部工具/知识库名称
             try:
-                await send_display_message(
+                await send_tool_processing_message(
                     self.conn,
-                    get_conn_display_text(self.conn, "processing"),
+                    get_conn_display_text(self.conn, "tool_processing"),
                 )
             except Exception as e:
                 self.logger.warning(f"发送工具调用显示消息失败: {e}")
