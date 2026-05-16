@@ -1,5 +1,6 @@
 """语言配置归一化工具。"""
 
+import random
 from config.logger import setup_logging
 
 TAG = __name__
@@ -123,17 +124,63 @@ DISPLAY_TEXT_I18N = {
         "Arabic": "جارٍ المعالجة",
     },
     "tool_processing": {
-        "Chinese": "我来帮您查一下，请稍等。",
-        "English": "Let me check that for you.",
-        "Japanese": "確認しますので、少々お待ちください。",
-        "Korean": "제가 확인해 볼게요. 잠시만 기다려 주세요.",
-        "French": "Je vais verifier cela pour vous. Un instant, s'il vous plait.",
-        "German": "Ich schaue das kurz fur Sie nach. Einen kleinen Moment bitte.",
-        "Russian": "Ya utochnyu eto dlya vas, pozhaluysta, nemnogo podozhdite.",
-        "Portuguese": "Vou verificar isso para voce. Aguarde um instante.",
-        "Spanish": "Voy a revisarlo por usted. Espere un momento, por favor.",
-        "Italian": "Controllo subito per lei. Attenda un momento, per favore.",
-        "Arabic": "سأتحقق من ذلك لك، يرجى الانتظار قليلا.",
+        "Chinese": [
+            "我来帮您查一下，请稍等。",
+            "这就帮您看看，您稍等一会儿。",
+            "好的，我马上帮您确认一下。",
+            "我先替您查一查，请稍候。",
+        ],
+        "English": [
+            "Let me check that for you.",
+            "Sure, I will look into it right away.",
+            "I am checking that for you now.",
+            "Give me a moment, I will verify it for you.",
+        ],
+        "Japanese": [
+            "確認しますので、少々お待ちください。",
+            "すぐにお調べしますので、少々お待ちください。",
+            "ただいま確認しています。少々お待ちください。",
+        ],
+        "Korean": [
+            "제가 확인해 볼게요. 잠시만 기다려 주세요.",
+            "바로 확인해 드릴게요. 잠시만요.",
+            "지금 확인 중입니다. 잠시만 기다려 주세요.",
+        ],
+        "French": [
+            "Je vais verifier cela pour vous. Un instant, s'il vous plait.",
+            "Je regarde cela tout de suite pour vous.",
+            "Un petit instant, je verifie cela pour vous.",
+        ],
+        "German": [
+            "Ich schaue das kurz fur Sie nach. Einen kleinen Moment bitte.",
+            "Ich prufe das sofort fur Sie.",
+            "Einen Augenblick bitte, ich sehe gleich nach.",
+        ],
+        "Russian": [
+            "Ya utochnyu eto dlya vas, pozhaluysta, nemnogo podozhdite.",
+            "Seychas proveryu eto dlya vas.",
+            "Odnu minutu, ya bystro vse utochnyu.",
+        ],
+        "Portuguese": [
+            "Vou verificar isso para voce. Aguarde um instante.",
+            "Ja estou verificando isso para voce.",
+            "So um momento, vou conferir isso agora.",
+        ],
+        "Spanish": [
+            "Voy a revisarlo por usted. Espere un momento, por favor.",
+            "Ahora mismo lo verifico para usted.",
+            "Un momento, ya lo estoy revisando.",
+        ],
+        "Italian": [
+            "Controllo subito per lei. Attenda un momento, per favore.",
+            "Verifico subito questa informazione per lei.",
+            "Solo un attimo, sto controllando adesso.",
+        ],
+        "Arabic": [
+            "سأتحقق من ذلك لك، يرجى الانتظار قليلا.",
+            "لحظة من فضلك، سأراجع ذلك حالا.",
+            "أنا أتحقق من ذلك الآن، الرجاء الانتظار قليلا.",
+        ],
     },
     "wakeup_greeting": {
         "Chinese": "嘿，你好呀",
@@ -231,7 +278,13 @@ def get_display_text(key: str, language, default="正在处理"):
         return default
 
     normalized = normalize_tts_language(language, default="Chinese")
-    return translations.get(normalized, translations.get("Chinese", default))
+    localized = translations.get(normalized, translations.get("Chinese", default))
+    if isinstance(localized, list):
+        candidates = [str(item).strip() for item in localized if str(item).strip()]
+        if candidates:
+            return random.choice(candidates)
+        return default
+    return localized
 
 
 def get_conn_display_text(conn, key: str, default="正在处理"):
