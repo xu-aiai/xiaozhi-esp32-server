@@ -47,6 +47,16 @@ wakeup_words_config = WakeupWordsConfig()
 _wakeup_response_lock = asyncio.Lock()
 
 
+async def wait_for_tts_ready(conn: "ConnectionHandler", timeout_seconds: float = 3) -> bool:
+    """等待 TTS 初始化完成，避免在连接早期直接访问空对象。"""
+    start_time = time.time()
+    while time.time() - start_time < timeout_seconds:
+        if conn.tts:
+            return True
+        await asyncio.sleep(0.1)
+    return False
+
+
 async def handleHelloMessage(conn: "ConnectionHandler", msg_json):
     """处理hello消息"""
     audio_params = msg_json.get("audio_params")
@@ -73,13 +83,7 @@ async def checkWakeupWords(conn: "ConnectionHandler", text):
         "enable_wakeup_words_response_cache"
     ]
 
-    # 等待tts初始化，最多等待3秒
-    start_time = time.time()
-    while time.time() - start_time < 3:
-        if conn.tts:
-            break
-        await asyncio.sleep(0.1)
-    else:
+    if not await wait_for_tts_ready(conn):
         return False
 
     if not enable_wakeup_words_response_cache:
@@ -152,6 +156,12 @@ async def reply_fixed_wakeup(conn: "ConnectionHandler", text: str | None = None)
         await send_stt_message(conn, text)
     else:
         await send_tts_message(conn, "start", reply_text)
+
+    if not await wait_for_tts_ready(conn):
+        conn.logger.bind(tag=TAG).warning("固定唤醒词命中时 TTS 尚未初始化，跳过语音回复")
+        await send_tts_message(conn, "stop", None)
+        conn.client_is_speaking = False
+        return
 
     conn.tts.store_tts_text(conn.sentence_id, reply_text)
     conn.tts.tts_text_queue.put(
