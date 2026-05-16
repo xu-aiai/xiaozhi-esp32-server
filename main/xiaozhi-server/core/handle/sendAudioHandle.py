@@ -365,28 +365,5 @@ async def send_display_message(conn: "ConnectionHandler", text):
 
 
 async def send_tool_processing_message(conn: "ConnectionHandler", text):
-    """发送工具处理中提示，包含文本和一段可选的短语音。"""
+    """发送工具处理中提示，仅显示文本，不播报语音。"""
     await send_display_message(conn, text)
-
-    enable_audio_prompt = conn.config.get("enable_tool_processing_audio_prompt", True)
-    if not enable_audio_prompt:
-        return
-
-    start_time = time.time()
-    while time.time() - start_time < 3:
-        if conn.tts:
-            break
-        await asyncio.sleep(0.1)
-    else:
-        conn.logger.bind(tag=TAG).debug("工具处理中提示音跳过：TTS 未在超时时间内完成初始化")
-        return
-
-    try:
-        opus_packets = await asyncio.to_thread(conn.tts.to_tts, text)
-        if not opus_packets:
-            return
-        await send_tts_message(conn, "sentence_start", text)
-        await sendAudio(conn, opus_packets)
-        await send_tts_message(conn, "stop", None)
-    except Exception as e:
-        conn.logger.bind(tag=TAG).warning(f"发送工具处理中提示音失败: {e}")
