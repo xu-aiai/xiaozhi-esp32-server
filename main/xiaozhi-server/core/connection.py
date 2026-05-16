@@ -189,6 +189,15 @@ class ConnectionHandler:
         # 初始化提示词管理器
         self.prompt_manager = PromptManager(self.config, self.logger)
 
+    def _get_current_llm_info(self):
+        """获取当前会话实际使用的 LLM 标识信息，便于排查线上问题。"""
+        selected_name = self.config.get("selected_module", {}).get("LLM", "unknown")
+        provider_name = (
+            getattr(self.llm, "model_name", None)
+            or getattr(self.llm, "__class__", type("Unknown", (), {})).__name__
+        )
+        return selected_name, provider_name
+
     async def handle_connection(self, ws: websockets.ServerConnection):
         try:
             # 获取运行中的事件循环（必须在异步上下文中）
@@ -1273,6 +1282,11 @@ class ConnectionHandler:
 
         if query is not None:
             self.logger.bind(tag=TAG).info(f"大模型收到用户消息: {query}")
+        if depth == 0:
+            llm_module_name, llm_model_name = self._get_current_llm_info()
+            self.logger.bind(tag=TAG).info(
+                f"本轮对话使用大模型: module={llm_module_name}, model={llm_model_name}"
+            )
 
         # 为最顶层时新建会话ID和发送FIRST请求
         if depth == 0:
